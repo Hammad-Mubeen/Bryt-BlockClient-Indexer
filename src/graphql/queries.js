@@ -15,7 +15,7 @@ var TransactionModel= require("../db/models/transaction.model");
 
 const blocks = {
   type: GraphQLList(blocksType),
-  description: "Retrieves list of blocks",
+  description: "Latest blocks and view all blocks",
   args: {
     start: { type: GraphQLInt },
     end: { type: GraphQLInt },
@@ -30,9 +30,25 @@ const blocks = {
   },
 };
 
+const block = {
+  type: blocksType,
+  description: "View a single block",
+  args: {
+    number: { type: GraphQLString }
+  },
+  async resolve(parent, args, context) {
+    try {
+      let block = await DB(BlockModel.table).where({block_number : args.number});
+      return block[0];
+    } catch (error) {
+      throw new Error(error);
+    }
+  },
+};
+
 const transactions = {
   type: GraphQLList(transactionsType),
-  description: "Retrieves list of transactions",
+  description: "Latest transactions and view all transactions",
   args: {
     start: { type: GraphQLInt },
     end: { type: GraphQLInt },
@@ -47,7 +63,25 @@ const transactions = {
   },
 };
 
+const transaction = {
+  type: transactionsType,
+  description: "View a single transaction",
+  args: {
+    hash: { type: GraphQLString }
+  },
+  async resolve(parent, args, context) {
+    try {
+      let transaction = await DB(TransactionModel.table).where({hash : args.hash});
+      return transaction[0];
+    } catch (error) {
+      throw new Error(error);
+    }
+  },
+};
+
 module.exports = {
   blocks,
-  transactions
+  block,
+  transactions,
+  transaction
 };

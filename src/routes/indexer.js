@@ -51,7 +51,7 @@ async function getLatestBlockHeight(retry) {
     if (flag == 1) {
       return latestBlockInfoResult;
     } else if (retry.rpcFailed == true) {
-      await sleep(5000);
+      await sleep(process.env.WAIT_FOR_BLOCK_TO_MINE);
       return false;
     }
   } catch (error) {
@@ -125,7 +125,7 @@ async function getBlockData(height, retry) {
       if (flag == 1) {
         return blockResponse;
       } else if (retry.rpcFailed == true) {
-        await sleep(5000);
+        await sleep(process.env.WAIT_FOR_BLOCK_TO_MINE);
         return false;
       }
   } catch (error) {
@@ -200,7 +200,7 @@ async function getTransactionData(hash, retry) {
       if (flag == 1) {
         return transactionResponse;
       } else if (retry.rpcFailed == true) {
-        await sleep(5000);
+        await sleep(process.env.WAIT_FOR_BLOCK_TO_MINE);
         return false;
       }
   } catch (error) {
@@ -249,7 +249,7 @@ async function Indexer()
     const blockHeight = await fetchLatestBlockHeightHelper();
     let blockNumber = blockHeight;
     console.log("block height: ", blockNumber);
-    //blockNumber = 1;
+    blockNumber = 76;
 
     while (true)
     {
@@ -310,7 +310,7 @@ async function Indexer()
             .returning("*");
           }
         }
-        await sleep(5000);
+        await sleep(process.env.WAIT_FOR_BLOCK_TO_MINE);
       }
       else{
         console.log("Duplicate block, skipping it...");
