@@ -23,6 +23,11 @@ const blocks = {
   async resolve(parent, args, context) {
     try {
       let blocks = await DB(BlockModel.table);
+      blocks.sort((a, b) => b.block_number - a.block_number);
+      if(args.start == 0 && args.end == 0)
+      {
+        return blocks;
+      }
       return blocks.splice(args.start, args.end);
     } catch (error) {
       throw new Error(error);
