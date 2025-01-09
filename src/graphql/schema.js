@@ -6,7 +6,8 @@ const {
   blocks,
   block,
   transactions,
-  transaction
+  transaction,
+  transactionsByAddress
 } = require("./queries");
 
 // Define QueryType
@@ -17,7 +18,8 @@ const QueryType = new GraphQLObjectType({
     blocks,
     block,
     transactions,
-    transaction
+    transaction,
+    transactionsByAddress
   },
 });
 

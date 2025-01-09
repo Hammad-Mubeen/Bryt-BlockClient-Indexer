@@ -89,9 +89,42 @@ const transaction = {
   },
 };
 
+const transactionsByAddress = {
+  type: GraphQLList(transactionsType),
+  description: "All transactions of an address",
+  args: {
+    address: { type: GraphQLString },
+    searchInto: { type: GraphQLString },
+    start: { type: GraphQLInt },
+    end: { type: GraphQLInt },
+  },
+  async resolve(parent, args, context) {
+    try {
+      let transactions = [];
+      if(args.searchInto == "from")
+      {
+        transactions = await DB(TransactionModel.table).where({from : args.address});
+      }
+      else if (args.searchInto == "to"){
+        transactions = await DB(TransactionModel.table).where({to : args.address});
+      }
+      
+      transactions.sort((a, b) => b.order - a.order);
+      if(args.start == 0 && args.end == 0)
+      {
+        return transactions;
+      }
+      return transactions.splice(args.start, args.end);
+    } catch (error) {
+      throw new Error(error);
+    }
+  },
+};
+
 module.exports = {
   blocks,
   block,
   transactions,
-  transaction
+  transaction,
+  transactionsByAddress
 };
