@@ -13,7 +13,7 @@ exports.up = async function (knex) {
     t.string("state_root").notNull();
     t.string("transaction_root").notNull();
     t.string("reciept_root").notNull();
-    t.string("timestamp").notNull();
+    t.string("timestamp").nullable();
     t.string("logs_bloom").notNull();
     t.specificType('transactions', 'text ARRAY');
     t.string("block_reward").notNull();

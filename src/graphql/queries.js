@@ -61,6 +61,11 @@ const transactions = {
   async resolve(parent, args, context) {
     try {
       let transactions = await DB(TransactionModel.table);
+      transactions.sort((a, b) => b.order - a.order);
+      if(args.start == 0 && args.end == 0)
+      {
+        return transactions;
+      }
       return transactions.splice(args.start, args.end);
     } catch (error) {
       throw new Error(error);

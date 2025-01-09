@@ -249,7 +249,7 @@ async function Indexer()
     const blockHeight = await fetchLatestBlockHeightHelper();
     let blockNumber = blockHeight;
     console.log("block height: ", blockNumber);
-    blockNumber = 76;
+    //blockNumber = 7558;
 
     while (true)
     {
@@ -270,7 +270,7 @@ async function Indexer()
           state_root: blockData.result.state_root,
           transaction_root : blockData.result.transaction_root,
           reciept_root: blockData.result.reciept_root,
-          timestamp: blockData.result.timestamp.toString(),
+          //timestamp: blockData.result.timestamp.toString(),
           logs_bloom: blockData.result.logs_bloom,
           transactions: blockData.result.transactions,
           block_reward: blockData.result.block_reward,
@@ -287,17 +287,20 @@ async function Indexer()
           {
             const transactionData = await fetchTransactionDataByHashHelper(blockData.result.transactions[i]);
             console.log("transactionData: ",transactionData);
+
+            let transactionModelData = await DB(TransactionModel.table);
             await DB(TransactionModel.table)
             .insert({
+              order:  transactionModelData ? (transactionModelData.length + 1).toString() : (1).toString(),
               hash: transactionData.result.transaction.TransferObj.hash,
               block : blockNumber.toString(),
               from: transactionData.result.transaction.TransferObj.from,
               to: transactionData.result.transaction.TransferObj.to,
               value: transactionData.result.transaction.TransferObj.value.toString(),
-              transaction_time: transactionData.result.transaction.transaction_time,
+              //transaction_time: transactionData.result.transaction.transaction_time,
               transaction_status: transactionData.result.transaction.transaction_status,
               functionType: transactionData.result.transaction.type,
-              unix_timestamp: transactionData.result.transaction.unix_timestamp.toString(),
+              //unix_timestamp: transactionData.result.transaction.unix_timestamp.toString(),
               Status: transactionData.result.transaction.Status,
               State: transactionData.result.transaction.State,
               nonce: transactionData.result.transaction.TransferObj.nonce.toString(),

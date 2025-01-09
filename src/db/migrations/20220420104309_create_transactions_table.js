@@ -6,15 +6,16 @@ exports.up = async function (knex) {
     await knex.raw('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
     return knex.schema.createTable("transactions", function (t) {
       t.uuid('id').primary().defaultTo(knex.raw('uuid_generate_v4()'));
+      t.string("order").notNull();
       t.string("hash").notNull();
       t.string("block").notNull();
       t.string("from").notNull();
       t.string("to").notNull();
       t.string("value").notNull();
-      t.string("transaction_time").notNull();
+      t.string("transaction_time").nullable();
       t.boolean("transaction_status");
       t.string("functionType").notNull();
-      t.string("unix_timestamp").notNull();
+      t.string("unix_timestamp").nullable();
       t.boolean("Status");
       t.boolean("State");
       t.string("nonce").notNull();
