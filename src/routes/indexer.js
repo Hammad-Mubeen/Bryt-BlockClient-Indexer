@@ -426,6 +426,8 @@ async function Indexer()
     let blockNumber = blockHeight;
     console.log("Latest Block Height is: ", blockNumber);
 
+    //blockNumber=31;
+
     while (true)
     {
       let blocks = await DB(BlockModel.table).where({ block_number : blockNumber.toString() });
@@ -515,6 +517,6 @@ async function Indexer()
   }
 }
 
-//Indexer();
+Indexer();
 
 module.exports = router;
