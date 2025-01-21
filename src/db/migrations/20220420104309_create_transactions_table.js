@@ -5,8 +5,7 @@
 exports.up = async function (knex) {
     await knex.raw('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
     return knex.schema.createTable("transactions", function (t) {
-      t.uuid('id').primary().defaultTo(knex.raw('uuid_generate_v4()'));
-      t.string("order").notNull();
+      t.bigIncrements('id').primary(); // Creates an auto-incrementing BIGSERIAL column
       t.string("hash").notNull();
       t.string("block").notNull();
       t.string("from").notNull();
@@ -23,7 +22,7 @@ exports.up = async function (knex) {
       t.string("node_id").notNull();
       t.string("gas").notNull();
       t.string("gas_price").notNull();
-      t.string("input").notNull();
+      t.text("input").notNull();
     });
   };
   

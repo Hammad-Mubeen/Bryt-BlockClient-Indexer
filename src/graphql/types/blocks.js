@@ -10,7 +10,7 @@ const blocksType = new GraphQLObjectType({
     name: "blocks",
     description: "blocks type",
     fields: () => ({
-        id: {type: GraphQLID },
+        id: {type: GraphQLString },
         version: {type: GraphQLString },
         merkle_root: {type: GraphQLString },
         block_number: {type: GraphQLString },

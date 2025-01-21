@@ -16,7 +16,8 @@ let JSON_RPC_NODE_URLs = [
 'http://3.16.190.75:8010/rpc',
 'http://3.16.190.75:8020/rpc',
 'http://3.16.190.75:8030/rpc',
-'http://3.16.190.75:8040/rpc'
+'http://3.16.190.75:8040/rpc',
+'http://3.16.190.75:8050/rpc'
 ];
 
 async function makeRPCSClients()
@@ -426,7 +427,7 @@ async function Indexer()
     let blockNumber = blockHeight;
     console.log("Latest Block Height is: ", blockNumber);
 
-    //blockNumber=31;
+    blockNumber=1;
 
     while (true)
     {
@@ -475,10 +476,8 @@ async function Indexer()
                 const transactionData = await fetchTransactionDataByHashHelper(blockData.result.transactions[i]);
                 console.log("transactionData: ",transactionData);
     
-                let transactionModelData = await DB(TransactionModel.table);
                 await DB(TransactionModel.table)
                 .insert({
-                  order:  transactionModelData ? (transactionModelData.length + 1).toString() : (1).toString(),
                   hash: transactionData.result.transaction.TransferObj.hash,
                   block : blockNumber.toString(),
                   from: transactionData.result.transaction.TransferObj.from,
@@ -517,6 +516,6 @@ async function Indexer()
   }
 }
 
-//Indexer();
+Indexer();
 
 module.exports = router;
