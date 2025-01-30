@@ -8,6 +8,7 @@ module.exports = {
       version,
       merkle_root,
       block_number,
+      block_status,
       previous_hash,
       state_root,
       transaction_root,

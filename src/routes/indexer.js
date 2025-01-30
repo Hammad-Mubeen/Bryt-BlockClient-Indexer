@@ -4,21 +4,36 @@ var express = require('express');
 var router = express.Router();
 const DB = require("../db");
 const BlockchainClient = require("bryt-sdk");
+const WebSocket = require('ws');
 var BlockModel = require("../db/models/block.model");
 var TransactionModel= require("../db/models/transaction.model");
 var AlertModel= require("../db/models/alert.model");
 
 console.log("=========== Connecting with RPCs ===========\n");
 
-let rpcs = [], current_rpc = null, wait_to_be_mined = null, total_no_of_retries = null;
+let rpcs = [], wss = null , current_rpc = null, wait_to_be_mined = null, total_no_of_retries = null,
+lastMinorityBlock = null, latestMajorityBlock = null, minority= null, majority = null;
 
 let JSON_RPC_NODE_URLs = [
-'http://3.16.190.75:8010/rpc',
-'http://3.16.190.75:8020/rpc',
-'http://3.16.190.75:8030/rpc',
-'http://3.16.190.75:8040/rpc',
-'http://3.16.190.75:8050/rpc'
+'http://' + process.env.DEVNET_NODE_URL +':8010/rpc',
+'http://' + process.env.DEVNET_NODE_URL +':8020/rpc',
+'http://' + process.env.DEVNET_NODE_URL +':8030/rpc',
+'http://' + process.env.DEVNET_NODE_URL +':8040/rpc',
+//'http://' + process.env.DEVNET_NODE_URL +':8050/rpc',
 ];
+
+let MEMPOOL_RPC_SOCKET_URLs = [
+'ws://' + process.env.DEVNET_NODE_URL +':8010',
+'ws://' + process.env.DEVNET_NODE_URL +':8020',
+'ws://' + process.env.DEVNET_NODE_URL +':8030',
+'ws://' + process.env.DEVNET_NODE_URL +':8040',
+//'ws://' + process.env.DEVNET_NODE_URL +':8050',
+] 
+
+async function createWebSocketServer(server)
+{
+  wss = new WebSocket.Server({ server });
+}
 
 async function makeRPCSClients()
 {
@@ -27,6 +42,40 @@ async function makeRPCSClients()
     rpcs[i] = new BlockchainClient(JSON_RPC_NODE_URLs[i],process.env.PRIVATE_KEY);
   }
   current_rpc = rpcs[0];
+}
+
+async function setWaitToBeMinedAndRetries(blockNumber)
+{
+  let height = BigInt(await fetchLatestBlockHeightHelper());
+  let start = height - BigInt(5);
+  if (blockNumber >= start && blockNumber <= height)
+  {
+    console.log("BlockClient is between 5 blocks less than latest block range...");
+    wait_to_be_mined = process.env.WAIT_TO_BE_MINED,
+    total_no_of_retries = process.env.TOTAL_NO_OF_RETRIES;
+  }
+  else{
+    console.log("BlockClient is 5 blocks behind the latest block...");
+    wait_to_be_mined=0; 
+    total_no_of_retries=0;
+  }
+}
+
+async function checkIfTransactionsFound(transactions_array,results,results_with_all_data)
+{
+  for (var i = 0; i < results.length; i++)
+  {
+    if (results[i]!=false)
+    {
+      if(results_with_all_data[i].result.transactions != null)
+      {
+        for (var j = 0; j < results_with_all_data[i].result.transactions.length; j++)
+        {
+          transactions_array.push(results_with_all_data[i].result.transactions[j]);
+        }
+      }
+    }
+  }
 }
 
 async function findMaxDuplicateElement(arr) {
@@ -53,21 +102,24 @@ async function findMaxDuplicateElement(arr) {
   return { array: array, element: maxElement, count: maxCount };
 }
 
-async function setWaitToBeMinedAndRetries(blockNumber)
+async function saveFaultyBlockInDb(blockNumber,block_status)
 {
-  let height = await fetchLatestBlockHeightHelper();
-  let start = height - 5;
-  if (blockNumber >= start && blockNumber <= height)
-  {
-    console.log("BlockClient is between 5 blocks less than latest block range...");
-    wait_to_be_mined = process.env.WAIT_TO_BE_MINED,
-    total_no_of_retries = process.env.TOTAL_NO_OF_RETRIES;
-  }
-  else{
-    console.log("BlockClient is 5 blocks behind the latest block...");
-    wait_to_be_mined=0; 
-    total_no_of_retries=0;
-  }
+  await DB(AlertModel.table)
+  .insert({
+    block_number: blockNumber.toString(),
+    block_status: block_status
+  })
+  .returning("*");
+}
+
+async function changeFaultyBlockStatusInDb(blockNumber,block_status)
+{
+  await DB(AlertModel.table)
+  .where({ block_hash: blockNumber.toString()})
+  .update({
+    block_status: block_status
+  })
+  .returning("*");
 }
 
 const sleep = (num) => {
@@ -147,7 +199,7 @@ async function fetchLatestBlockHeightHelper() {
 }
 
 // to get block data against block height
-async function getBlockData(height, retry) {
+async function getBlockData(height, retry, current_rpc) {
   try {
       console.log("Fetching block : \n", height);
       
@@ -193,12 +245,12 @@ async function getBlockData(height, retry) {
 }
 
 // This function is to retry blockData upon RPC Failures
-async function fetchBlockDataHelper(blockNumber) {
+async function fetchBlockDataHelper(blockNumber,current_rpc) {
   try {
     let retry = {
       rpcFailed: false,
     };
-    let blockResult = await getBlockData(blockNumber, retry);
+    let blockResult = await getBlockData(blockNumber, retry, current_rpc);
     
     if (blockResult == false) {
       if (retry.rpcFailed == true) {
@@ -211,7 +263,7 @@ async function fetchBlockDataHelper(blockNumber) {
           }
           retry.rpcFailed = false;
           console.log("Retrying the RPC Call for block: ", blockNumber);
-          blockResult = await getBlockData(blockNumber, retry);
+          blockResult = await getBlockData(blockNumber, retry, current_rpc);
           totalRetries = totalRetries - 1;
         }
         console.log(
@@ -303,15 +355,116 @@ async function fetchTransactionDataByHashHelper(hash) {
   }
 }
 
+async function syncData()
+{
+  if(minority == null || majority == null || minority == false || majority == false)
+  {
+    console.log("No need to sync the data.");
+  }
+  else{
+    // start syncing data
+    minority = false;
+    let last_minority_block = lastMinorityBlock, latest_majority_block = latestMajorityBlock;
+    let  alertData = await DB(AlertModel.table);
+    for (var i =0; i < alertData.length; i++ )
+    {
+      let alertBlockNumber = BigInt(alertData[i].block_number);
+      console.log("syncing block Number: ",alertBlockNumber);
+      if(alertBlockNumber >= last_minority_block && alertBlockNumber < latest_majority_block)
+      {
+        let sync_results=[], sync_results_with_all_data=[];
+        for (var j = 0; j < rpcs.length; j++)
+        {
+          console.log("RPC: ",JSON_RPC_NODE_URLs[j]);
+          let result = await fetchBlockDataHelper(alertBlockNumber.toString(),rpcs[j]);
+          if(result == false)
+          {
+            console.log("Either port is stuck or down: ", JSON_RPC_NODE_URLs[j]);
+            sync_results_with_all_data=[];
+            break;
+          }
+          sync_results[j] = result.result.block_hash;
+          sync_results_with_all_data[j] = result;
+          console.log("block data: ",result);
+        }
+        if(sync_results_with_all_data.length !=0)
+        {
+          const maxDuplicateElement = await findMaxDuplicateElement(sync_results);
+          // if data is correct
+          if(maxDuplicateElement.count > 1)
+          {
+            console.log("correct block data found in syncing: ",alertBlockNumber);
+            let index = sync_results.indexOf(maxDuplicateElement.element);
+            await DB(BlockModel.table)
+            .where({ block_number: alertBlockNumber.toString() })
+            .update({
+              version: sync_results_with_all_data[index].result.version.toString(),
+              merkle_root: sync_results_with_all_data[index].result.version,
+              block_status: "Finalized",
+              previous_hash: sync_results_with_all_data[index].result.previous_hash,
+              state_root: sync_results_with_all_data[index].result.state_root,
+              transaction_root : sync_results_with_all_data[index].result.transaction_root,
+              reciept_root: sync_results_with_all_data[index].result.reciept_root,
+              //timestamp: sync_results_with_all_data[index].result.timestamp.toString(),
+              logs_bloom: sync_results_with_all_data[index].result.logs_bloom,
+              transactions: sync_results_with_all_data[index].result.transactions,
+              block_reward: sync_results_with_all_data[index].result.block_reward,
+              value: sync_results_with_all_data[index].result.value,
+              data: sync_results_with_all_data[index].result.data,
+              to: sync_results_with_all_data[index].result.to,
+              block_hash: sync_results_with_all_data[index].result.block_hash
+            })
+            .returning("*");
+            if(sync_results_with_all_data[index].result.transactions != null)
+            {
+              for (var k =0; k < sync_results_with_all_data[index].result.transactions.length; k++ )
+              {
+                await DB(TransactionModel.table)
+                .where({ hash: sync_results_with_all_data[index].result.transactions[k]})
+                .update({
+                  block : alertBlockNumber.toString(),
+                })
+                .returning("*");
+              }
+            }
+            console.log("changing block status in alert table.");
+            await changeFaultyBlockStatusInDb(alertBlockNumber,"Finalized");
+          }
+          else{
+            console.log("Majority data not found in syncing for block number: ",alertBlockNumber);
+          }
+        }
+      }
+      if(alertBlockNumber == latestMajorityBlock)
+      {
+        let block = await DB(BlockModel.table).where({ block_number: alertBlockNumber.toString() });
+        if(block.result.transactions != null)
+        {
+          for (var j =0; j < block.result.transactions.length; j++ )
+          {
+            await DB(TransactionModel.table)
+            .where({ hash: block.result.transactions[j]})
+            .update({
+              block : alertBlockNumber.toString(),
+            })
+            .returning("*");
+          }
+        }
+      }
+    }
+  }
+}
+
 // This function is to get correct block
 async function getCorrectBlock(blockNumber) {
   try {
-    let results=[], results_without_false=[], results_with_all_data=[];
+    let results=[], results_without_false=[], results_with_all_data=[], index, block_status;
+    //read all RPCS for blocks
     for (var i = 0; i < rpcs.length; i++)
     {
       current_rpc = rpcs[i];
       console.log("RPC: ",JSON_RPC_NODE_URLs[i]);
-      let result = await fetchBlockDataHelper(blockNumber.toString());
+      let result = await fetchBlockDataHelper(blockNumber.toString(),current_rpc);
       if(result == false)
       {
         results[i]= result;
@@ -324,96 +477,196 @@ async function getCorrectBlock(blockNumber) {
       console.log("block data: ",result);
     }
 
-    // check if block data is not found on any RPC
+    // return false after saving faulty block number
     let result = !results.some(e => e);
     if (result == true)
     {
-      console.log("block data is not found on any RPC: ",blockNumber);
-      console.log("Saving in db.");
-      // saves in db and return false
-      await DB(AlertModel.table)
-      .insert({
-        block_number: blockNumber.toString()
-      })
-      .returning("*");
-      return false;
+      block_status= "not found";
+      console.log("block data not found on any RPC: ",blockNumber);
+      await saveFaultyBlockInDb(blockNumber,block_status);
+      console.log("Saved faulty block in db.");
+      return {blockData: false, block_status: block_status};
     }
     else
     {
+      // if only 1 port have a block data
       results_without_false= results.filter(element => element !== false);
-
-      // if only one block data is found, set that rpc and return data
       if(results_without_false.length == 1)
       {
         console.log("One block data is found, setting that rpc and returning data.");
         console.log("block data is correct for blocknumber: ",blockNumber);
-        let index = results.indexOf(results_without_false[0]);
-        current_rpc = rpcs[index];
-        return results_with_all_data[index];
-      }
-      
-      //find most found block, set that rpc and return data, if every block occurence is 1 saves in db and return false
-      const maxDuplicateElement = await findMaxDuplicateElement(results_without_false);
-      let count=0;
-      for (var i = 0; i < maxDuplicateElement.array.length; i++)
-      {
-        if(maxDuplicateElement.count == maxDuplicateElement.array[i].count)
-        {
-          count++;
-        }
-      }
-      if(maxDuplicateElement.count == 1 || count > 1)
-      {
-        console.log("block data is not correct, either all different block hashes on ports OR no highest occurance of one block hash: ",blockNumber);
-        console.log("Saving in db.");
-        // saves in db and return false
-        await DB(AlertModel.table)
-        .insert({
-          block_number: blockNumber.toString()
-        })
-        .returning("*");
-
-        // doing for demo 
-        for (var i = 0; i < results.length; i++)
-        {
-          if (results[i]!=false)
-          {
-            if(results_with_all_data[i].result.transactions != null)
-            {
-              current_rpc = rpcs[i];
-              return results_with_all_data[i];
-            }
-          }
-        }
-        let index = results.indexOf(results_without_false[0]);
-        current_rpc = rpcs[index];
-        return results_with_all_data[index];
-        //return false;
+        index = results.indexOf(results_without_false[0]);
+        block_status="Finalized";
       }
       else{
-          console.log("block data is correct, either all block hashes are same on ports OR a highest occurance of one block hash: ",blockNumber);
-          // doing for demo 
-          for (var i = 0; i < results.length; i++)
+        //check highest block hash occurance
+        const maxDuplicateElement = await findMaxDuplicateElement(results_without_false);
+        let count=0;
+        for (var i = 0; i < maxDuplicateElement.array.length; i++)
+        {
+          if(maxDuplicateElement.count == maxDuplicateElement.array[i].count)
           {
-            if (results[i]!=false)
-            {
-              if(results_with_all_data[i].result.transactions != null)
-              {
-                current_rpc = rpcs[i];
-                return results_with_all_data[i];
-              }
-            }
+            count++;
           }
-          let index = results.indexOf(maxDuplicateElement.element);
-          current_rpc = rpcs[index];
-          return results_with_all_data[index];
+        }
+        
+        //check on which ports transactions found
+        let transactions_array=[];
+        await checkIfTransactionsFound(transactions_array,results,results_with_all_data);
+        if(transactions_array.length != 0){
+          results_with_all_data[0].result.transactions = transactions_array;
+          index = results.indexOf(results_without_false[0]);
+        }
+  
+        //if data is not correct
+        if(maxDuplicateElement.count == 1 || count > 1)
+        {  
+          block_status="Mined";
+          console.log("block data is not correct, either all different block hashes on ports OR no highest occurance of one block hash: ",blockNumber);
+          await saveFaultyBlockInDb(blockNumber,block_status);
+          console.log("Saved faulty block in db.");
+          //if no transactions found
+          if(transactions_array.length == 0)
+          {
+            index = results.indexOf(results_without_false[0]);
+          }
+          minority = true;
+          if(majority == true || majority == null)
+          {
+            lastMinorityBlock = blockNumber;
+          }
+          majority = false;
+        }
+        else{
+          console.log("block data is correct, either all block hashes are same on ports OR a highest occurance of one block hash: ",blockNumber);
+          //if no transactions found
+          if(transactions_array.length == 0)
+          {
+            index = results.indexOf(maxDuplicateElement.element);
+          }
+          block_status="Finalized";
+
+          majority = true;
+          latestMajorityBlock = blockNumber;
+          //syncData();
+        }
       }
+      current_rpc = rpcs[index];
+      return {blockData: results_with_all_data[index], block_status:block_status};
     }
   } catch (error) {
     console.log("Error : ", error);
   }
 }
+async function listenToMempoolRPCSockets(mempoolRPCSocketURL,transactions,transactions_with_all_data)
+{
+  // start listening
+  // Create a WebSocket connection
+  const socket = new WebSocket(mempoolRPCSocketURL);
 
+  // Connection opened event
+  socket.addEventListener('open', () => {
+      console.log('Connected to RPC WebSocket: ',mempoolRPCSocketURL);
+  });
+
+  // Message event: handle messages from the server
+  socket.addEventListener('message', (event) => {
+      console.log('Message from RPC WebSocket: ', mempoolRPCSocketURL, ' :',event.data);
+      let transaction = event.data;
+      let transactionHash = transaction.TransferObj.hash;
+      
+      if (!transactions.includes(transactionHash)) {
+        transactions.push(transactionHash);
+        transactions_with_all_data.push(transaction);
+        console.log(`${transactionHash} transaction hash to the array.`);
+      } else {
+        console.log(`${transactionHash} is already in the array.`);
+      }
+  });
+
+  // Handle errors
+  socket.addEventListener('error', (error) => {
+      console.log('RPC WebSocket error: ',mempoolRPCSocketURL, ' :',error);
+  });
+
+  // Close event: handle when the connection is closed
+  socket.addEventListener('close', () => {
+      console.log('WebSocket connection closed: ', mempoolRPCSocketURL);
+  });
+}
+async function listenUnconfirmedTransactions()
+{
+  try
+  {
+    let transactions=[], transactions_with_all_data=[];
+    //listen for unconfirmed transactions
+    for (var j = 0; j < MEMPOOL_RPC_SOCKET_URLs.length; j++)
+    {
+      listenToMempoolRPCSockets(MEMPOOL_RPC_SOCKET_URLs[j],transactions,transactions_with_all_data);
+    }
+
+    // WebSocket Server connection event
+    wss.on('connection', async(ws) => {
+      console.log('New WebSocket server connection established!');
+      
+      // Handle WebSocket Server close event
+      ws.on('close', () => {
+        console.log('WebSocket server connection closed');
+      });
+
+      let i=0;
+      while(true)
+      {
+        if(transactions_with_all_data[i] != null)
+        {
+          let transaction = transactions_with_all_data[i];
+
+          //push unconfirmed transactions to client
+          ws.send(JSON.stringify(transaction));
+
+          // save unconfirmed transaction in DB
+          let transactionInDB = await DB(TransactionModel.table).where({ hash :  transaction.TransferObj.hash});
+          console.log(" transaction "+transaction.TransferObj.hash+" db record: " + transactionInDB[0]);
+
+          if(transactionInDB.length == 0)
+          {
+            await DB(TransactionModel.table)
+            .insert({
+              transaction_Status: "Pending",
+              hash: transaction.TransferObj.hash,
+              from: transaction.TransferObj.from,
+              to: transaction.TransferObj.to,
+              value: transaction.TransferObj.value.toString(),
+              //transaction_time: transaction.transaction_time,
+              transaction_status: transaction.transaction_status,
+              functionType: transaction.type,
+              //unix_timestamp: transaction.unix_timestamp.toString(),
+              Status: transaction.Status,
+              State: transaction.State,
+              nonce: transaction.TransferObj.nonce.toString(),
+              type: transaction.TransferObj.type.toString(),
+              node_id: transaction.TransferObj.node_id,
+              gas: transaction.TransferObj.gas.toString(),
+              gas_price: transaction.TransferObj.gas_price.toString(),
+              input: transaction.TransferObj.input
+            })
+            .returning("*");
+          }
+          else{
+            console.log("Already in db, skipping it...");
+          }
+          i = i + 1;
+        }
+        else{
+          console.log("No new transactions are coming...");
+          await sleep(2000);
+        }
+      }
+    });
+  } catch (error) {
+    console.log("Error : ", error);
+  }
+}
 //Indexer main function
 //This function looks for every block and its transactions and save it in the db
 async function Indexer()
@@ -423,11 +676,11 @@ async function Indexer()
     await makeRPCSClients();
 
     // getting latest block height
-    const blockHeight = await fetchLatestBlockHeightHelper();
-    let blockNumber = blockHeight;
+    const blockHeight = BigInt(await fetchLatestBlockHeightHelper());
+    let blockNumber = (blockHeight);
     console.log("Latest Block Height is: ", blockNumber);
 
-    blockNumber=1;
+    blockNumber=BigInt(1050);
 
     while (true)
     {
@@ -437,7 +690,7 @@ async function Indexer()
       if(blocks.length == 0)
       {
         await setWaitToBeMinedAndRetries(blockNumber);
-        let blockData = await getCorrectBlock(blockNumber);
+        let {blockData,block_status} = await getCorrectBlock(blockNumber);
         if (blockData == false)
         {
           console.log("RPCs have block's data issue ...");
@@ -449,6 +702,7 @@ async function Indexer()
             version: blockData.result.version.toString(),
             merkle_root: blockData.result.version,
             block_number: blockNumber.toString(),
+            block_status: block_status,
             previous_hash: blockData.result.previous_hash,
             state_root: blockData.result.state_root,
             transaction_root : blockData.result.transaction_root,
@@ -478,6 +732,7 @@ async function Indexer()
     
                 await DB(TransactionModel.table)
                 .insert({
+                  transaction_Status: "Success",
                   hash: transactionData.result.transaction.TransferObj.hash,
                   block : blockNumber.toString(),
                   from: transactionData.result.transaction.TransferObj.from,
@@ -499,23 +754,39 @@ async function Indexer()
                 .returning("*");
               }
               else{
-                console.log("Duplicate transaction, skipping it ...  ", blockData.result.transactions[i]);
+                if(transaction[0].transaction_Status == "Pending")
+                {
+                  console.log("Unconfirmed(Pending) transaction found in the block, updating its status.");
+                  await DB(TransactionModel.table)
+                  .where({hash :  blockData.result.transactions[i]})
+                  .update({
+                    block: blockNumber.toString(),
+                    transaction_Status: "Success"
+                  })
+                  .returning("*");
+                }
+                else{
+                  console.log("Duplicate Transaction, skipping it because it is not pending...  ", blockData.result.transactions[i]);
+                }
               }
             }
           }
         }
-        //await sleep(wait_to_be_mined);
       }
       else{
         console.log("Duplicate block, skipping it ...  ", blockNumber);
       }
-      blockNumber = blockNumber + 1;
+      blockNumber = blockNumber + BigInt(1);
     }
   }catch(error){
     console.log("error : ", error);
   }
 }
 
-Indexer();
+//listenUnconfirmedTransactions();
+//Indexer();
 
-module.exports = router;
+module.exports = {
+  router,
+  createWebSocketServer
+};

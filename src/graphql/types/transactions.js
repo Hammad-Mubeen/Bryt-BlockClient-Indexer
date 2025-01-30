@@ -12,6 +12,7 @@ const transactionsType = new GraphQLObjectType({
     description: "transactions type",
     fields: () => ({
         id: {type: GraphQLString },
+        transaction_Status: {type: GraphQLString },
         hash: {type: GraphQLString },
         block: {type: GraphQLString },
         from: {type: GraphQLString },

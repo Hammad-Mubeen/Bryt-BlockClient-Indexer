@@ -9,6 +9,7 @@ exports.up = async function (knex) {
     t.string("version").notNull();
     t.string("merkle_root").notNull();
     t.string("block_number").notNull();
+    t.string("block_status").notNull();
     t.string("previous_hash").notNull();
     t.string("state_root").notNull();
     t.string("transaction_root").notNull();

@@ -14,6 +14,7 @@ const blocksType = new GraphQLObjectType({
         version: {type: GraphQLString },
         merkle_root: {type: GraphQLString },
         block_number: {type: GraphQLString },
+        block_status: {type: GraphQLString },
         previous_hash: {type: GraphQLString },
         state_root: {type: GraphQLString },
         transaction_root: {type: GraphQLString },

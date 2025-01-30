@@ -34,7 +34,7 @@ app.get("/", function (req, res) {
   return res.send("Bryt BlockClient Indexer");
 });
 
-app.use('/indexer', IndexerRouter);
+app.use('/indexer', IndexerRouter.router);
 app.use(
   "/graphql",
   graphqlHTTP({
@@ -55,9 +55,15 @@ const normalizePort = (val) => {
   return false;
 };
 
+async function initializeWebSocket(server)
+{
+  await IndexerRouter.createWebSocketServer(server);
+}
 const port = normalizePort(SERVER_PORT || "3000");
 console.log(`Server running at 127.0.0.1:${port}`);
 const server = http.createServer(app);
+// Create a WebSocket server on top of the HTTP server
+initializeWebSocket(server);
 server.listen(port);
 
 const onError = (error) => {

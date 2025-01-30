@@ -6,8 +6,9 @@ exports.up = async function (knex) {
     await knex.raw('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
     return knex.schema.createTable("transactions", function (t) {
       t.bigIncrements('id').primary(); // Creates an auto-incrementing BIGSERIAL column
+      t.string("transaction_Status").notNull();
       t.string("hash").notNull();
-      t.string("block").notNull();
+      t.string("block").nullable();
       t.string("from").notNull();
       t.string("to").notNull();
       t.string("value").notNull();

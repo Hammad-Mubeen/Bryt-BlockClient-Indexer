@@ -5,6 +5,7 @@ module.exports = {
   whitelist: (data) =>
     whitelist(data, [
       id,
+      transaction_Status,
       hash,
       block,
       from,
