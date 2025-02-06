@@ -37,7 +37,7 @@ let RPC_SOCKET_URLs = [
 async function createWebSocketServer(server)
 {
   wss = new WebSocket.Server({ server });
-  wss.on('connection', async(ws) => {
+  wss.on('connection', (ws) => {
     client = ws;
   });
 }
@@ -796,7 +796,7 @@ async function Indexer()
     let blockNumber = (blockHeight);
     console.log("Latest Block Height is: ", blockNumber);
 
-    blockNumber=BigInt(1);
+    blockNumber=BigInt(126);
 
     while (true)
     {
