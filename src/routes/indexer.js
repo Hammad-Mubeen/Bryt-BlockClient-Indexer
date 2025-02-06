@@ -547,8 +547,8 @@ async function getCorrectBlock(blockNumber) {
         let transactions_array=[];
         await checkIfTransactionsFound(transactions_array,results,results_with_all_data);
         if(transactions_array.length != 0){
-          results_with_all_data[0].result.transactions = transactions_array;
           index = results.indexOf(results_without_false[0]);
+          results_with_all_data[index].result.transactions = transactions_array;
         }
   
         //if data is not correct
@@ -625,7 +625,7 @@ async function listenToRPCSockets(RPCSocketURL,transactions,transactions_with_al
         console.log('Message from RPC WebSocket: ', RPCSocketURL);
         console.log("transaction_ballot: ",parsedMessage.data);
 
-        let blockNumber= parsedMessage.data.epochCycle;
+        let blockNumber = parsedMessage.data.epochCycle;
         let ballotHashes = parsedMessage.data.hashes;
 
         if (ballotHashes != null)
