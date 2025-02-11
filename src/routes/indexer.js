@@ -8,10 +8,11 @@ const WebSocket = require('ws');
 var BlockModel = require("../db/models/block.model");
 var TransactionModel= require("../db/models/transaction.model");
 var AlertModel= require("../db/models/alert.model");
+var unconfirmedAndBallotedBlockModel= require("../db/models/unconfirmedAndBallotedBlock.model");
 
 console.log("=========== Connecting with RPCs ===========\n");
 
-let rpcs = [], wss = null, client = null, ballots = [], current_rpc = null, wait_to_be_mined = null, total_no_of_retries = null,
+let rpcs = [], wss = null, ballots = [], current_rpc = null, wait_to_be_mined = null, total_no_of_retries = null,
 lastMinorityBlock = null, latestMajorityBlock = null, minority= null, majority = null,
 block = [
   {type:"Unconfirmed", blockNumber: null, totalTransactions: 0 },
@@ -37,9 +38,50 @@ let RPC_SOCKET_URLs = [
 async function createWebSocketServer(server)
 {
   wss = new WebSocket.Server({ server });
-  wss.on('connection', (ws) => {
-    client = ws;
+  wss.on('connection', async(ws) => {
+    console.log('A new client connected');
+    // // Set up a ping-pong heartbeat to keep the connection alive
+    // const heartbeatInterval = 10000; // 10 seconds
+    // const timeoutInterval = 15000; // 15 seconds timeout before considering the connection dead
+
+    // // Ping the client every `heartbeatInterval` ms
+    // const intervalId = setInterval(() => {
+    //   if (ws.readyState === WebSocket.OPEN) {
+    //     ws.ping(); // Send ping to the client
+    //   }
+    // }, heartbeatInterval);
+
+    // // When the server gets a pong response from the client
+    // ws.on('pong', () => {
+    //   console.log('Received pong from client');
+    //   // Reset the timeout for pong
+    //   clearTimeout(ws.pongTimeout);
+    //   ws.pongTimeout = setTimeout(() => {
+    //     console.log('No pong received, closing connection');
+    //     ws.terminate(); // Close the connection if no pong is received
+    //   }, timeoutInterval); // Wait `timeoutInterval` before terminating the connection
+    // });
+
+    // Handle client disconnection
+    ws.on('close', () => {
+      console.log('Client disconnected');
+      //clearInterval(intervalId); // Clear the ping interval
+      //clients.delete(ws); // Remove client from the set
+    });
+
+    // Handle errors
+    ws.on('error', (err) => {
+      console.error('WebSocket error:', err);
+    });
+
+    // // Handle the initial ping timeout
+    // ws.pongTimeout = setTimeout(() => {
+    //   console.log('No pong received from client, closing connection');
+    //   ws.terminate(); // Close connection if no pong is received after timeout
+    // }, timeoutInterval);
   });
+
+  console.log('WebSocket server running...');
 }
 
 async function makeRPCSClients()
@@ -137,18 +179,33 @@ async function updateUnconfirmeOrBallotedBlock()
   let unconfirmedTransactionsCount = await DB(TransactionModel.table).where({transaction_Status: "Unconfirmed"});
   let ballotedTransactionsCount = await DB(TransactionModel.table).where({transaction_Status: "Balloted"});
   
-  if(ballotedTransactionsCount.length == 0)
+  if(unconfirmedTransactionsCount.length == 0 && ballotedTransactionsCount.length == 0)
   {
+    block[0].blockNumber = null
+    block[0].totalTransactions = 0;
     block[1].blockNumber = null;
     block[1].totalTransactions = 0; 
-    block[0].blockNumber = (count + BigInt(1)).toString();
-    block[0].totalTransactions = unconfirmedTransactionsCount.length; 
   }
-  else{
-    block[1].blockNumber = (count + BigInt(1)).toString();
-    block[1].totalTransactions = ballotedTransactionsCount.length; 
+  else if(unconfirmedTransactionsCount.length > 0 && ballotedTransactionsCount.length > 0)
+  {
     block[0].blockNumber = (count + BigInt(2)).toString();
-    block[0].totalTransactions = unconfirmedTransactionsCount.length; 
+    block[0].totalTransactions = unconfirmedTransactionsCount.length;
+    block[1].blockNumber = (count + BigInt(1)).toString();
+    block[1].totalTransactions = ballotedTransactionsCount.length;
+  }
+  else if(unconfirmedTransactionsCount.length == 0 && ballotedTransactionsCount.length > 0)
+  {
+    block[0].blockNumber = null;
+    block[0].totalTransactions = 0;
+    block[1].blockNumber = (count + BigInt(1)).toString();
+    block[1].totalTransactions = ballotedTransactionsCount.length;    
+  }
+  else if(unconfirmedTransactionsCount.length > 0 && ballotedTransactionsCount.length == 0)
+  {
+    block[0].blockNumber = (count + BigInt(1)).toString();
+    block[0].totalTransactions = unconfirmedTransactionsCount.length;
+    block[1].blockNumber = null;
+    block[1].totalTransactions = 0;
   }
 }
 
@@ -658,6 +715,8 @@ async function listenToRPCSockets(RPCSocketURL,transactions,transactions_with_al
   // Close event: handle when the connection is closed
   socket.addEventListener('close', () => {
       console.log('WebSocket connection closed: ', RPCSocketURL);
+      // Attempt to reconnect after a delay when the connection is closed
+      setTimeout(() =>listenToRPCSockets(RPCSocketURL,transactions,transactions_with_all_data), 5000); // Reconnect after 5 seconds
   });
 }
 async function listenTransactions()
@@ -683,7 +742,12 @@ async function listenTransactions()
           message: transaction
         };
         
-        client.send(JSON.stringify(message));
+        //broad cast message
+        wss.clients.forEach(function each(client) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify(message));
+          }
+        });
 
         // save unconfirmed transaction in DB
         let transactionInDB = await DB(TransactionModel.table).where({ hash :  transaction.TransferObj.hash});
@@ -710,12 +774,46 @@ async function listenTransactions()
             input: transaction.TransferObj.input
           })
           .returning("*");
+
           await updateUnconfirmeOrBallotedBlock();
+
           message = {
             topic: "blocks",
             message: block
           };
-          client.send(JSON.stringify(message));
+
+          //broad cast message
+          wss.clients.forEach(function each(client) {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify(message));
+            }
+          });
+
+          // save current unconfirmed OR balloted block data 
+          let unconfirmedAndBallotedBlockData = await DB(unconfirmedAndBallotedBlockModel.table);
+          if(unconfirmedAndBallotedBlockData.length == 0)
+          {
+            await DB(unconfirmedAndBallotedBlockModel.table)
+            .insert({
+              id: 1,
+              unconfirmed_blocknumber: block[0].blockNumber,
+              unconfirmed_total_transactions : block[0].totalTransactions,
+              balloted_blocknumber: block[1].blockNumber,
+              balloted_total_transactions: block[1].totalTransactions
+            })
+            .returning("*"); 
+          }
+          else{
+            await DB(unconfirmedAndBallotedBlockModel.table)
+            .where({id: 1})
+            .update({
+              unconfirmed_blocknumber: block[0].blockNumber,
+              unconfirmed_total_transactions : block[0].totalTransactions,
+              balloted_blocknumber: block[1].blockNumber,
+              balloted_total_transactions: block[1].totalTransactions
+            })
+            .returning("*"); 
+          }
         }
         else{
           console.log("Already in db, skipping it...");
@@ -753,7 +851,13 @@ async function handleBallotedTransactions()
               topic: "balloted-transactions",
               message: {blockNumber: ballot.blockNumber, hash: ballot.ballotHashes[j]}
             };
-            client.send(JSON.stringify(message));
+
+            //broad cast message
+            wss.clients.forEach(function each(client) {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify(message));
+              }
+            });
 
             await DB(TransactionModel.table)
             .where({ hash :  ballot.ballotHashes[j]})
@@ -765,7 +869,39 @@ async function handleBallotedTransactions()
               topic: "blocks",
               message: block
             };
-            client.send(JSON.stringify(message));
+
+            //broad cast message
+            wss.clients.forEach(function each(client) {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify(message));
+              }
+            });
+            
+            // save current unconfirmed OR balloted block data 
+            let unconfirmedAndBallotedBlockData = await DB(unconfirmedAndBallotedBlockModel.table);
+            if(unconfirmedAndBallotedBlockData.length == 0)
+            {
+              await DB(unconfirmedAndBallotedBlockModel.table)
+              .insert({
+                id: 1,
+                unconfirmed_blocknumber: block[0].blockNumber,
+                unconfirmed_total_transactions : block[0].totalTransactions,
+                balloted_blocknumber: block[1].blockNumber,
+                balloted_total_transactions: block[1].totalTransactions
+              })
+              .returning("*"); 
+            }
+            else{
+              await DB(unconfirmedAndBallotedBlockModel.table)
+              .where({id: 1})
+              .update({
+                unconfirmed_blocknumber: block[0].blockNumber,
+                unconfirmed_total_transactions : block[0].totalTransactions,
+                balloted_blocknumber: block[1].blockNumber,
+                balloted_total_transactions: block[1].totalTransactions
+              })
+              .returning("*"); 
+            }
           }
           else{
             console.log("Already updated to balloted, skipping it...");
@@ -796,7 +932,7 @@ async function Indexer()
     let blockNumber = (blockHeight);
     console.log("Latest Block Height is: ", blockNumber);
 
-    blockNumber=BigInt(326);
+    blockNumber=BigInt(1);
 
     while (true)
     {
@@ -870,11 +1006,19 @@ async function Indexer()
                 if(transaction[0].transaction_Status == "Balloted")
                 {
                   console.log("Balloted transaction found in the block, updating its status.");
+
                   let message = {
                     topic: "balloted-transaction-removed",
                     message: {hash: transaction[0].hash}
                   };
-                  client.send(JSON.stringify(message));
+
+                  //broad cast message
+                  wss.clients.forEach(function each(client) {
+                    if (client.readyState === WebSocket.OPEN) {
+                      client.send(JSON.stringify(message));
+                    }
+                  });
+
                   await DB(TransactionModel.table)
                   .where({hash :  blockData.result.transactions[i]})
                   .update({
@@ -882,12 +1026,46 @@ async function Indexer()
                     transaction_Status: "Confirmed"
                   })
                   .returning("*");
+
                   await updateUnconfirmeOrBallotedBlock();
+
                   message = {
                     topic: "blocks",
                     message: block
                   };
-                  client.send(JSON.stringify(message));
+
+                  //broad cast message
+                  wss.clients.forEach(function each(client) {
+                    if (client.readyState === WebSocket.OPEN) {
+                      client.send(JSON.stringify(message));
+                    }
+                  });
+
+                  // save current unconfirmed OR balloted block data 
+                  let unconfirmedAndBallotedBlockData = await DB(unconfirmedAndBallotedBlockModel.table);
+                  if(unconfirmedAndBallotedBlockData.length == 0)
+                  {
+                    await DB(unconfirmedAndBallotedBlockModel.table)
+                    .insert({
+                      id: 1,
+                      unconfirmed_blocknumber: block[0].blockNumber,
+                      unconfirmed_total_transactions : block[0].totalTransactions,
+                      balloted_blocknumber: block[1].blockNumber,
+                      balloted_total_transactions: block[1].totalTransactions
+                    })
+                    .returning("*"); 
+                  }
+                  else{
+                    await DB(unconfirmedAndBallotedBlockModel.table)
+                    .where({id: 1})
+                    .update({
+                      unconfirmed_blocknumber: block[0].blockNumber,
+                      unconfirmed_total_transactions : block[0].totalTransactions,
+                      balloted_blocknumber: block[1].blockNumber,
+                      balloted_total_transactions: block[1].totalTransactions
+                    })
+                    .returning("*"); 
+                  }
                 }
                 else{
                   console.log("Duplicate Transaction, skipping it because it is not Balloted...  ", blockData.result.transactions[i]);

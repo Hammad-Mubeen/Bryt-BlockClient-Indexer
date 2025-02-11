@@ -1,5 +1,6 @@
 const {
   GraphQLString,
+  GraphQLList
 } = require("graphql");
 
 // import types
@@ -7,11 +8,13 @@ const { blocksType } = require("./types/blocks");
 const { blocksWithCountType } = require("./types/blocksWithCount");
 const { transactionsType } = require("./types/transactions");
 const { transactionsWithCountType } = require("./types/transactionsWithCount");
+const { unconfirmedAndBallotedBlockType } = require("./types/unconfirmedAndBallotedBlock");
 
 const DB = require("../db");
 // import Models
 var BlockModel = require("../db/models/block.model");
 var TransactionModel= require("../db/models/transaction.model");
+var unconfirmedAndBallotedBlockModel= require("../db/models/unconfirmedAndBallotedBlock.model");
 
 const blocks = {
   type: blocksWithCountType,
@@ -58,6 +61,27 @@ const block = {
   },
 };
 
+const unconfirmedAndBallotedBlock = {
+  type: new GraphQLList(unconfirmedAndBallotedBlockType),
+  description: "View Unconfirmed and Balloted cuurent socket data",
+  async resolve(parent, context) {
+    try {
+      let unconfirmedAndBallotedBlock = await DB(unconfirmedAndBallotedBlockModel.table);
+      let block = [
+        {type:"Unconfirmed",
+          blockNumber : unconfirmedAndBallotedBlock[0].unconfirmed_blocknumber,
+          totalTransactions: unconfirmedAndBallotedBlock[0].unconfirmed_total_transactions},
+        {type:"Balloted",
+          blockNumber : unconfirmedAndBallotedBlock[0].balloted_blocknumber,
+          totalTransactions: unconfirmedAndBallotedBlock[0].balloted_total_transactions}
+      ];
+      return block;
+    } catch (error) {
+      throw new Error(error);
+    }
+  },
+};
+
 const transactions = {
   type: transactionsWithCountType,
   description: "Latest transactions and view all transactions",
@@ -81,6 +105,26 @@ const transactions = {
       .limit(parseFloat(args.limit));
       
       return {transactions: transactions, count: count};
+    } catch (error) {
+      throw new Error(error);
+    }
+  },
+};
+
+const transactionsByStatus = {
+  type: new GraphQLList(transactionsType),
+  description: "Unconfirmed Or Balloted Or Confirmed transactions according to status",
+  args: {
+    status: { type: GraphQLString }
+  },
+  async resolve(parent, args, context) {
+    try {
+
+      let transactions = await DB(TransactionModel.table)
+      .where({transaction_Status : args.status})
+      .orderBy('id','desc');
+
+      return transactions;
     } catch (error) {
       throw new Error(error);
     }
@@ -143,5 +187,7 @@ module.exports = {
   block,
   transactions,
   transaction,
-  transactionsByAddress
+  transactionsByAddress,
+  transactionsByStatus,
+  unconfirmedAndBallotedBlock
 };
