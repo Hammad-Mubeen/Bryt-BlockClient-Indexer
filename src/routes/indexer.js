@@ -171,41 +171,51 @@ async function changeFaultyBlockStatusInDb(blockNumber,block_status)
   .returning("*");
 }
 
-async function updateUnconfirmeOrBallotedBlock()
+async function updateUnconfirmeOrBallotedBlock(blockNumber)
 {
-  let arr = await DB(BlockModel.table).count('* as total');
-  let count = BigInt(arr[0].total.toString());
-
   let unconfirmedTransactionsCount = await DB(TransactionModel.table).where({transaction_Status: "Unconfirmed"});
   let ballotedTransactionsCount = await DB(TransactionModel.table).where({transaction_Status: "Balloted"});
+
+  let arr = await DB(BlockModel.table).count('* as total');
+  let count = BigInt(arr[0].total.toString());
   
-  if(unconfirmedTransactionsCount.length == 0 && ballotedTransactionsCount.length == 0)
-  {
-    block[0].blockNumber = null
-    block[0].totalTransactions = 0;
-    block[1].blockNumber = null;
-    block[1].totalTransactions = 0; 
-  }
-  else if(unconfirmedTransactionsCount.length > 0 && ballotedTransactionsCount.length > 0)
-  {
-    block[0].blockNumber = (count + BigInt(2)).toString();
-    block[0].totalTransactions = unconfirmedTransactionsCount.length;
-    block[1].blockNumber = (count + BigInt(1)).toString();
-    block[1].totalTransactions = ballotedTransactionsCount.length;
-  }
-  else if(unconfirmedTransactionsCount.length == 0 && ballotedTransactionsCount.length > 0)
-  {
-    block[0].blockNumber = null;
-    block[0].totalTransactions = 0;
-    block[1].blockNumber = (count + BigInt(1)).toString();
-    block[1].totalTransactions = ballotedTransactionsCount.length;    
-  }
-  else if(unconfirmedTransactionsCount.length > 0 && ballotedTransactionsCount.length == 0)
+  //Case 1: Unconfirmed transaction coming and balloted null
+  if(unconfirmedTransactionsCount.length > 0 && ballotedTransactionsCount.length == 0)
   {
     block[0].blockNumber = (count + BigInt(1)).toString();
     block[0].totalTransactions = unconfirmedTransactionsCount.length;
     block[1].blockNumber = null;
     block[1].totalTransactions = 0;
+    return;
+  }
+
+  //Case 2: Unconfirmed transaction null and balloted coming
+  if(unconfirmedTransactionsCount.length == 0 && ballotedTransactionsCount.length > 0)
+  {
+    block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
+    block[0].totalTransactions = unconfirmedTransactionsCount.length;
+    block[1].blockNumber = (blockNumber).toString();
+    block[1].totalTransactions = ballotedTransactionsCount.length;   
+    return;
+  }
+
+  //Case 1: Unconfirmed transaction coming and balloted coming
+  if(unconfirmedTransactionsCount.length > 0 && ballotedTransactionsCount.length > 0)
+  {
+    block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
+    block[0].totalTransactions = unconfirmedTransactionsCount.length;
+    block[1].blockNumber = (blockNumber).toString();
+    block[1].totalTransactions = ballotedTransactionsCount.length; 
+    return;  
+  }
+
+  if(unconfirmedTransactionsCount.length == 0 && ballotedTransactionsCount.length == 0)
+  {
+    block[0].blockNumber = null;
+    block[0].totalTransactions = 0;
+    block[1].blockNumber = null;
+    block[1].totalTransactions = 0;
+    return;
   }
 }
 
@@ -716,6 +726,7 @@ async function listenToRPCSockets(RPCSocketURL,transactions,transactions_with_al
   socket.addEventListener('close', () => {
       console.log('WebSocket connection closed: ', RPCSocketURL);
       // Attempt to reconnect after a delay when the connection is closed
+      console.log("Attempt to reconnect after a delay when the connection is closed...");
       setTimeout(() =>listenToRPCSockets(RPCSocketURL,transactions,transactions_with_all_data), 5000); // Reconnect after 5 seconds
   });
 }
@@ -775,7 +786,7 @@ async function listenTransactions()
           })
           .returning("*");
 
-          await updateUnconfirmeOrBallotedBlock();
+          await updateUnconfirmeOrBallotedBlock(null);
 
           message = {
             topic: "blocks",
@@ -864,7 +875,7 @@ async function handleBallotedTransactions()
             .update({transaction_Status: "Balloted"})
             .returning("*");
   
-            await updateUnconfirmeOrBallotedBlock();
+            await updateUnconfirmeOrBallotedBlock(ballot.blockNumber);
             message = {
               topic: "blocks",
               message: block
@@ -932,7 +943,7 @@ async function Indexer()
     let blockNumber = (blockHeight);
     console.log("Latest Block Height is: ", blockNumber);
 
-    blockNumber=BigInt(1);
+    blockNumber=BigInt(505);
 
     while (true)
     {
@@ -1027,7 +1038,7 @@ async function Indexer()
                   })
                   .returning("*");
 
-                  await updateUnconfirmeOrBallotedBlock();
+                  await updateUnconfirmeOrBallotedBlock(null);
 
                   message = {
                     topic: "blocks",
