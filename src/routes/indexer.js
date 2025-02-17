@@ -125,6 +125,7 @@ async function checkIfTransactionsFound(transactions_array,results,results_with_
       }
     }
   }
+  transactions_array = transactions_array.filter((value, index, self) => self.indexOf(value) === index);
 }
 
 async function findMaxDuplicateElement(arr) {
