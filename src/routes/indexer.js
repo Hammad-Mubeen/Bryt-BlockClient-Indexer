@@ -196,6 +196,8 @@ async function updateUnconfirmeOrBallotedBlock(blockNumber)
     if(blockNumber == null)
     {
       console.log("(Unconfirmed transaction null and balloted coming) blockbNumber is : ", blockNumber);
+      block[0].totalTransactions = unconfirmedTransactionsCount.length;
+      block[1].totalTransactions = ballotedTransactionsCount.length;
     }
     else{
       block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
@@ -960,7 +962,7 @@ async function Indexer()
     let blockNumber = (blockHeight);
     console.log("Latest Block Height is: ", blockNumber);
 
-    blockNumber=BigInt(1);
+    blockNumber=BigInt(330);
 
     while (true)
     {
