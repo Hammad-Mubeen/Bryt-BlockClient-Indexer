@@ -126,6 +126,7 @@ async function checkIfTransactionsFound(transactions_array,results,results_with_
     }
   }
   transactions_array = transactions_array.filter((value, index, self) => self.indexOf(value) === index);
+  return transactions_array;
 }
 
 async function findMaxDuplicateElement(arr) {
@@ -631,7 +632,7 @@ async function getCorrectBlock(blockNumber) {
         
         //check on which ports transactions found
         let transactions_array=[];
-        await checkIfTransactionsFound(transactions_array,results,results_with_all_data);
+        transactions_array = await checkIfTransactionsFound(transactions_array,results,results_with_all_data);
         if(transactions_array.length != 0){
           index = results.indexOf(results_without_false[0]);
           results_with_all_data[index].result.transactions = transactions_array;
@@ -962,7 +963,7 @@ async function Indexer()
     let blockNumber = (blockHeight);
     console.log("Latest Block Height is: ", blockNumber);
 
-    blockNumber=BigInt(330);
+    blockNumber=BigInt(1);
 
     while (true)
     {
