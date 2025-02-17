@@ -192,23 +192,39 @@ async function updateUnconfirmeOrBallotedBlock(blockNumber)
   //Case 2: Unconfirmed transaction null and balloted coming
   if(unconfirmedTransactionsCount.length == 0 && ballotedTransactionsCount.length > 0)
   {
-    block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
-    block[0].totalTransactions = unconfirmedTransactionsCount.length;
-    block[1].blockNumber = (blockNumber).toString();
-    block[1].totalTransactions = ballotedTransactionsCount.length;   
+    if(blockNumber == null)
+    {
+      console.log("(Unconfirmed transaction null and balloted coming) blockbNumber is : ", blockNumber);
+    }
+    else{
+      block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
+      block[0].totalTransactions = unconfirmedTransactionsCount.length;
+      block[1].blockNumber = (blockNumber).toString();
+      block[1].totalTransactions = ballotedTransactionsCount.length;   
+    }
     return;
   }
 
-  //Case 1: Unconfirmed transaction coming and balloted coming
+  //Case 3: Unconfirmed transaction coming and balloted coming
   if(unconfirmedTransactionsCount.length > 0 && ballotedTransactionsCount.length > 0)
   {
-    block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
-    block[0].totalTransactions = unconfirmedTransactionsCount.length;
-    block[1].blockNumber = (blockNumber).toString();
-    block[1].totalTransactions = ballotedTransactionsCount.length; 
+    if(blockNumber == null)
+    {
+      console.log("Unconfirmed transaction came, blockbNumber is : ", blockNumber);
+      block[0].totalTransactions = unconfirmedTransactionsCount.length;
+      block[1].totalTransactions = ballotedTransactionsCount.length;
+    }
+    else
+    {
+      block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
+      block[0].totalTransactions = unconfirmedTransactionsCount.length;
+      block[1].blockNumber = (blockNumber).toString();
+      block[1].totalTransactions = ballotedTransactionsCount.length;
+    }
     return;  
   }
 
+  //Case 4: Unconfirmed transaction and balloted null
   if(unconfirmedTransactionsCount.length == 0 && ballotedTransactionsCount.length == 0)
   {
     block[0].blockNumber = null;
