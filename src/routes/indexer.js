@@ -1034,9 +1034,9 @@ async function Indexer()
                 .returning("*");
               }
               else{
-                if(transaction[0].transaction_Status == "Balloted")
+                if(transaction[0].transaction_Status == "Balloted" || transaction[0].transaction_Status == "Unconfirmed" )
                 {
-                  console.log("Balloted transaction found in the block, updating its status.");
+                  console.log("transaction found in the block, updating its status.");
 
                   let message = {
                     topic: "balloted-transaction-removed",
@@ -1099,7 +1099,7 @@ async function Indexer()
                   }
                 }
                 else{
-                  console.log("Duplicate Transaction, skipping it because it is not Balloted...  ", blockData.result.transactions[i]);
+                  console.log("Duplicate Transaction, skipping it...  ", blockData.result.transactions[i]);
                 }
               }
             }
