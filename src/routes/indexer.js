@@ -20,19 +20,19 @@ block = [
 ];
 
 let JSON_RPC_NODE_URLs = [
-'http://' + process.env.DEVNET_NODE_URL +':8010/rpc',
-'http://' + process.env.DEVNET_NODE_URL +':8020/rpc',
-'http://' + process.env.DEVNET_NODE_URL +':8030/rpc',
-'http://' + process.env.DEVNET_NODE_URL +':8040/rpc',
-'http://' + process.env.DEVNET_NODE_URL +':8050/rpc',
+'http://' + process.env.NODE_URL +':8010/rpc',
+'http://' + process.env.NODE_URL +':8020/rpc',
+'http://' + process.env.NODE_URL +':8030/rpc',
+'http://' + process.env.NODE_URL +':8040/rpc',
+'http://' + process.env.NODE_URL +':8050/rpc',
 ];
 
 let RPC_SOCKET_URLs = [
-'ws://' + process.env.DEVNET_NODE_URL +':8010/ws/v2',
-'ws://' + process.env.DEVNET_NODE_URL +':8020/ws/v2',
-'ws://' + process.env.DEVNET_NODE_URL +':8030/ws/v2',
-'ws://' + process.env.DEVNET_NODE_URL +':8040/ws/v2',
-'ws://' + process.env.DEVNET_NODE_URL +':8050/ws/v2',
+'ws://' + process.env.NODE_URL +':8010/ws/v2',
+'ws://' + process.env.NODE_URL +':8020/ws/v2',
+'ws://' + process.env.NODE_URL +':8030/ws/v2',
+'ws://' + process.env.NODE_URL +':8040/ws/v2',
+'ws://' + process.env.NODE_URL +':8050/ws/v2',
 ] 
 
 async function createWebSocketServer(server)
