@@ -1077,7 +1077,8 @@ async function handleBlocks()
                 node_id: transactionData.result.transaction.TransferObj.node_id,
                 gas: transactionData.result.transaction.TransferObj.gas.toString(),
                 gas_price: transactionData.result.transaction.TransferObj.gas_price.toString(),
-                input: transactionData.result.transaction.TransferObj.input
+                input: transactionData.result.transaction.TransferObj.input,
+                unix_timestamp:Date.now()
               })
               .returning("*");
             }
@@ -1102,7 +1103,8 @@ async function handleBlocks()
                 .where({hash :  blockData.transactions[i]})
                 .update({
                   block: (blockData.block_number).toString(),
-                  transaction_Status: "Confirmed"
+                  transaction_Status: "Confirmed",
+                  unix_timestamp:Date.now()
                 })
                 .returning("*");
 
