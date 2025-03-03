@@ -5,7 +5,12 @@ const errorMiddleware = require("./src/middlewares/error");
 const debug = require("debug")("Bryt-BlockClient-Indexer:server");
 const http = require("http");
 const IndexerRouter = require("./src/routes/indexer");
+const backupRouter = require("./src/routes/backup");
 const cors = require("cors");
+
+//connecting database's backup file  
+require("./backupDatabase");
+
 const { SERVER_PORT } = process.env;
 
 const app = express();
@@ -35,6 +40,7 @@ app.get("/", function (req, res) {
 });
 
 app.use('/indexer', IndexerRouter.router);
+app.use('/', backupRouter);
 app.use(
   "/graphql",
   graphqlHTTP({

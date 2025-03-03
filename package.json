@@ -16,6 +16,7 @@
     "prettier": "^2.7.1"
   },
   "dependencies": {
+    "aws-sdk": "^2.1692.0",
     "bryt-sdk": "^1.0.1",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
@@ -28,6 +29,7 @@
     "knex": "^3.1.0",
     "lodash.clonedeep": "^4.5.0",
     "moment": "^2.30.1",
+    "node-cron": "^3.0.3",
     "pg": "^8.8.0",
     "winston": "^3.7.2",
     "ws": "^8.18.0",

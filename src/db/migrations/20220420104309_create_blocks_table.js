@@ -5,7 +5,8 @@
 exports.up = async function (knex) {
   await knex.raw('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
   return knex.schema.createTable("blocks", function (t) {
-    t.bigIncrements('id').primary(); // Creates an auto-incrementing BIGSERIAL column
+    t.string("block_hash").primary();
+    t.bigint('id').notNull();
     t.string("version").notNull();
     t.string("merkle_root").notNull();
     t.string("block_number").notNull();
@@ -21,7 +22,6 @@ exports.up = async function (knex) {
     t.string("value").notNull();
     t.string("data").notNull();
     t.string("to").notNull();
-    t.string("block_hash").notNull();
   });
 };
 

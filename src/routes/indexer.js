@@ -9,10 +9,13 @@ var BlockModel = require("../db/models/block.model");
 var TransactionModel= require("../db/models/transaction.model");
 var AlertModel= require("../db/models/alert.model");
 var unconfirmedAndBallotedBlockModel= require("../db/models/unconfirmedAndBallotedBlock.model");
+var unconfirmedTransactionsQueueModel= require("../db/models/unconfirmedTransactionsQueue.model");
+var ballotedTransactionsQueueModel= require("../db/models/ballotedTransactionsQueue.model");
+var blocksQueueModel= require("../db/models/blocksQueue.model");
 
 console.log("=========== Connecting with RPCs ===========\n");
 
-let rpcs = [], wss = null, ballots = [], current_rpc = null, wait_to_be_mined = null, total_no_of_retries = null,
+let rpcs = [], wss = null, current_rpc = null, wait_to_be_mined = null, total_no_of_retries = null,
 lastMinorityBlock = null, latestMajorityBlock = null, minority= null, majority = null,
 block = [
   {type:"Unconfirmed", blockNumber: null, totalTransactions: 0 },
@@ -20,19 +23,19 @@ block = [
 ];
 
 let JSON_RPC_NODE_URLs = [
-'http://' + process.env.DEVNET_NODE_URL +':8010/rpc',
-'http://' + process.env.DEVNET_NODE_URL +':8020/rpc',
-'http://' + process.env.DEVNET_NODE_URL +':8030/rpc',
-'http://' + process.env.DEVNET_NODE_URL +':8040/rpc',
-'http://' + process.env.DEVNET_NODE_URL +':8050/rpc',
+'http://' + process.env.NODE_URL +':8010/rpc',
+'http://' + process.env.NODE_URL +':8020/rpc',
+'http://' + process.env.NODE_URL +':8030/rpc',
+'http://' + process.env.NODE_URL +':8040/rpc',
+'http://' + process.env.NODE_URL +':8050/rpc',
 ];
 
 let RPC_SOCKET_URLs = [
-'ws://' + process.env.DEVNET_NODE_URL +':8010/ws/v2',
-'ws://' + process.env.DEVNET_NODE_URL +':8020/ws/v2',
-'ws://' + process.env.DEVNET_NODE_URL +':8030/ws/v2',
-'ws://' + process.env.DEVNET_NODE_URL +':8040/ws/v2',
-'ws://' + process.env.DEVNET_NODE_URL +':8050/ws/v2',
+'ws://' + process.env.NODE_URL +':8010/ws/v2',
+'ws://' + process.env.NODE_URL +':8020/ws/v2',
+'ws://' + process.env.NODE_URL +':8030/ws/v2',
+'ws://' + process.env.NODE_URL +':8040/ws/v2',
+'ws://' + process.env.NODE_URL +':8050/ws/v2',
 ] 
 
 async function createWebSocketServer(server)
@@ -40,45 +43,16 @@ async function createWebSocketServer(server)
   wss = new WebSocket.Server({ server });
   wss.on('connection', async(ws) => {
     console.log('A new client connected');
-    // // Set up a ping-pong heartbeat to keep the connection alive
-    // const heartbeatInterval = 10000; // 10 seconds
-    // const timeoutInterval = 15000; // 15 seconds timeout before considering the connection dead
-
-    // // Ping the client every `heartbeatInterval` ms
-    // const intervalId = setInterval(() => {
-    //   if (ws.readyState === WebSocket.OPEN) {
-    //     ws.ping(); // Send ping to the client
-    //   }
-    // }, heartbeatInterval);
-
-    // // When the server gets a pong response from the client
-    // ws.on('pong', () => {
-    //   console.log('Received pong from client');
-    //   // Reset the timeout for pong
-    //   clearTimeout(ws.pongTimeout);
-    //   ws.pongTimeout = setTimeout(() => {
-    //     console.log('No pong received, closing connection');
-    //     ws.terminate(); // Close the connection if no pong is received
-    //   }, timeoutInterval); // Wait `timeoutInterval` before terminating the connection
-    // });
-
+ 
     // Handle client disconnection
     ws.on('close', () => {
       console.log('Client disconnected');
-      //clearInterval(intervalId); // Clear the ping interval
-      //clients.delete(ws); // Remove client from the set
     });
 
     // Handle errors
     ws.on('error', (err) => {
       console.error('WebSocket error:', err);
     });
-
-    // // Handle the initial ping timeout
-    // ws.pongTimeout = setTimeout(() => {
-    //   console.log('No pong received from client, closing connection');
-    //   ws.terminate(); // Close connection if no pong is received after timeout
-    // }, timeoutInterval);
   });
 
   console.log('WebSocket server running...');
@@ -678,7 +652,7 @@ async function getCorrectBlock(blockNumber) {
     console.log("Error : ", error);
   }
 }
-async function listenToRPCSockets(RPCSocketURL,transactions,transactions_with_all_data)
+async function listenToRPCSockets(RPCSocketURL)
 {
   // start listening
   // Create a WebSocket connection
@@ -690,50 +664,59 @@ async function listenToRPCSockets(RPCSocketURL,transactions,transactions_with_al
   });
 
   // Message event: handle messages from the server
-  socket.addEventListener('message', (event) => {
+  socket.addEventListener('message', async (event) => {
+      const timestamp = Date.now();
       const parsedMessage = JSON.parse(event.data);
       if(parsedMessage.type == "mempool_transaction")
       {
         console.log('Message from RPC WebSocket: ', RPCSocketURL);
         console.log("mempool_transaction: ",parsedMessage.data);
-        let transaction = parsedMessage.data;
-        let transactionHash = transaction.TransferObj.hash;
-        
-        if (!transactions.includes(transactionHash)) {
-          transactions.push(transactionHash);
-          transactions_with_all_data.push(transaction);
-          console.log(`${transactionHash} transaction hash to the array.`);
-        } else {
-          console.log(`${transactionHash} is already in the array.`);
-        }
+        //enqueue data
+        await DB(unconfirmedTransactionsQueueModel.table)
+        .insert({
+          hash: parsedMessage.data.TransferObj.hash,
+          Status:"process",
+          timestamp: timestamp,
+          data: JSON.stringify(parsedMessage.data)
+        })
+        .onConflict('hash')
+        .ignore();
       }
       else if(parsedMessage.type == "transaction_ballot")
       {
         console.log('Message from RPC WebSocket: ', RPCSocketURL);
         console.log("transaction_ballot: ",parsedMessage.data);
 
-        let blockNumber = parsedMessage.data.epochCycle;
-        let ballotHashes = parsedMessage.data.hashes;
-
-        if (ballotHashes != null)
+        if (parsedMessage.data.hashes != null)
         {
-          if(ballots.length == 0)
-          {
-            let ballot = {blockNumber: blockNumber, ballotHashes: ballotHashes};
-            ballots.push(ballot);
-          }
-          else{
-            let found = ballots.some(obj => Object.values(obj).includes(blockNumber));
-            if (!found) 
-            {
-              let ballot = {blockNumber: blockNumber, ballotHashes: ballotHashes};
-              ballots.push(ballot);
-            }
-            else{
-              console.log("blocknumber repeating in ballot...");
-            }
-          }
+          //enqueue data
+          await DB(ballotedTransactionsQueueModel.table)
+          .insert({
+            hash: parsedMessage.data.hashesHex,
+            Status:"process",
+            timestamp: timestamp,
+            data: JSON.stringify({blockNumber: parsedMessage.data.epochCycle,
+               ballotHashes: parsedMessage.data.hashes})
+          })
+          .onConflict('hash')
+          .ignore();
         }
+      }
+      else if(parsedMessage.type == "finalized_block")
+      {
+        console.log('Message from RPC WebSocket: ', RPCSocketURL);
+        console.log("finalized_block: ",parsedMessage.data);
+
+        //enqueue data
+        await DB(blocksQueueModel.table)
+        .insert({
+          hash: parsedMessage.data.block_hash,
+          Status:"process",
+          timestamp: timestamp,
+          data: JSON.stringify(parsedMessage.data)
+        })
+        .onConflict('hash')
+        .ignore();
       }
   });
 
@@ -750,44 +733,63 @@ async function listenToRPCSockets(RPCSocketURL,transactions,transactions_with_al
       setTimeout(() =>listenToRPCSockets(RPCSocketURL,transactions,transactions_with_all_data), 5000); // Reconnect after 5 seconds
   });
 }
-async function listenTransactions()
+async function listener()
 {
   try
   {
-    let transactions=[], transactions_with_all_data=[], ballots=[];
     //listen for unconfirmed transactions and balloted block
     for (var j = 0; j < RPC_SOCKET_URLs.length; j++)
     {
-      await listenToRPCSockets(RPC_SOCKET_URLs[j],transactions,transactions_with_all_data,ballots);
+      await listenToRPCSockets(RPC_SOCKET_URLs[j]);
     }
+  } catch (error) {
+    console.log("Error : ", error);
+  }
+}
 
-    let i = 0, message = {};
+async function handleUnconfirmedTransactions()
+{
+  try
+  {
+    //process unconfirmed transactions
+    let message = {};
     while(true)
     {
-      if(transactions_with_all_data[i] != null)
+      let unconfirmedTransactionsQueue = await DB(unconfirmedTransactionsQueueModel.table)
+      .where({Status:"process"})
+      .orderBy('timestamp','asc')
+      .limit(1);
+
+      console.log("unconfirmedTransactionsQueue: ",unconfirmedTransactionsQueue[0]);
+      if(unconfirmedTransactionsQueue[0] != undefined)
       {
-        let transaction = transactions_with_all_data[i];
+        let hash = unconfirmedTransactionsQueue[0].hash;
+        let transaction = JSON.parse(unconfirmedTransactionsQueue[0].data);
 
-        message = {
-          topic: "unconfirmed-transactions",
-          message: transaction
-        };
-        
-        //broad cast message
-        wss.clients.forEach(function each(client) {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(message));
-          }
-        });
-
-        // save unconfirmed transaction in DB
-        let transactionInDB = await DB(TransactionModel.table).where({ hash :  transaction.TransferObj.hash});
-        console.log(" transaction "+transaction.TransferObj.hash+" db record: " + transactionInDB[0]);
+        let transactionInDB = await DB(TransactionModel.table).where({ hash : hash});
+        console.log(" transaction "+hash+" db record: " + transactionInDB[0]);
 
         if(transactionInDB.length == 0)
         {
+          message = {
+            topic: "unconfirmed-transactions",
+            message: transaction
+          };
+          
+          //broad cast message
+          wss.clients.forEach(function each(client) {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify(message));
+            }
+          });
+
+          let arr = await DB(TransactionModel.table).count('* as total');
+          let count = BigInt(arr[0].total.toString());
+
+          // save unconfirmed transaction in DB
           await DB(TransactionModel.table)
           .insert({
+            id: count + BigInt(1),
             transaction_Status: "Unconfirmed",
             hash: transaction.TransferObj.hash,
             from: transaction.TransferObj.from,
@@ -845,11 +847,14 @@ async function listenTransactions()
             })
             .returning("*"); 
           }
+
+          await DB(unconfirmedTransactionsQueueModel.table)
+          .where({hash: unconfirmedTransactionsQueue[0].hash})
+          .update({Status : "completed"});
         }
         else{
           console.log("Already in db, skipping it...");
         }
-        i = i + 1;
       }
       else{
         console.log("No new unconfirmed transactions are coming...");
@@ -865,22 +870,31 @@ async function handleBallotedTransactions()
 {
   try
   {
-    let i = 0, message = {};
+    //process balloted transactions
+    let message = {};
     while(true)
     {
-      if(ballots[i] != null)
+      let ballotedTransactionsQueue = await DB(ballotedTransactionsQueueModel.table)
+      .where({Status:"process"})
+      .orderBy('timestamp','asc')
+      .limit(1);
+
+      console.log("ballotedTransactionsQueue: ",ballotedTransactionsQueue[0]);
+
+      if(ballotedTransactionsQueue[0] != undefined)
       {
-        let ballot = ballots[i];
-        for (var j=0; j< ballot.ballotHashes.length; j++)
+        let ballot = JSON.parse(ballotedTransactionsQueue[0].data);
+  
+        for (var i=0; i< ballot.ballotHashes.length; i++)
         {
-          let transactionInDB = await DB(TransactionModel.table).where({ hash :  ballot.ballotHashes[j]});
-          console.log(" transaction "+ballot.ballotHashes[j]+" db record: " + transactionInDB[0]);
+          let transactionInDB = await DB(TransactionModel.table).where({ hash :  ballot.ballotHashes[i]});
+          console.log(" transaction "+ballot.ballotHashes[i]+" db record: " + transactionInDB[0]);
 
           if(transactionInDB[0].transaction_Status == "Unconfirmed")
           {
             message = {
               topic: "balloted-transactions",
-              message: {blockNumber: ballot.blockNumber, hash: ballot.ballotHashes[j]}
+              message: {blockNumber: ballot.blockNumber, hash: ballot.ballotHashes[i]}
             };
 
             //broad cast message
@@ -891,7 +905,7 @@ async function handleBallotedTransactions()
             });
 
             await DB(TransactionModel.table)
-            .where({ hash :  ballot.ballotHashes[j]})
+            .where({ hash :  ballot.ballotHashes[i]})
             .update({transaction_Status: "Balloted"})
             .returning("*");
   
@@ -938,10 +952,215 @@ async function handleBallotedTransactions()
             console.log("Already updated to balloted, skipping it...");
           }
         }
-        i = i + 1;
+        await DB(ballotedTransactionsQueueModel.table)
+        .where({hash: ballotedTransactionsQueue[0].hash})
+        .update({Status : "completed"});
       }
       else{
         console.log("No balloted transactions are coming...");
+        await sleep(2000);
+      }
+    }
+  } catch (error) {
+    console.log("Error : ", error);
+  }
+}
+
+
+async function handleBlocks()
+{
+  try
+  {
+    //process blocks
+    let message = {};
+    while(true)
+    {
+      let blocksQueue = await DB(blocksQueueModel.table)
+      .where({Status:"process"})
+      .orderBy('timestamp','asc')
+      .limit(1);
+
+      console.log("blocksQueue: ",blocksQueue[0]);
+      if(blocksQueue[0] != undefined)
+      {
+        let blockData = JSON.parse(blocksQueue[0].data);
+
+        let blocks = await DB(BlockModel.table).where({ block_number : (blockData.block_number).toString() });
+        console.log(" block number " + blockData.block_number + " db record: " + blocks[0]);
+        
+        if(blocks.length == 0)
+        {
+          console.log("New block");
+          await DB(BlockModel.table)
+          .insert({
+            id: blockData.block_number,
+            version: blockData.version.toString(),
+            merkle_root: blockData.version,
+            block_number: blockData.block_number,
+            block_status: "Mined",
+            previous_hash: blockData.previous_hash,
+            state_root: blockData.state_root,
+            transaction_root : blockData.transaction_root,
+            reciept_root: blockData.reciept_root,
+            logs_bloom: blockData.logs_bloom,
+            transactions: blockData.transactions,
+            block_reward: blockData.block_reward,
+            value: blockData.value,
+            data: blockData.data,
+            to: blockData.to,
+            block_hash: blockData.block_hash
+          })
+          .returning("*");
+        }
+        else{
+          
+          if(blockData.transactions != null)
+          {
+            console.log("block on a block number with transactions");
+            let transactions= blocks[0].transactions;
+            if(transactions == null)
+            {
+              await DB(BlockModel.table)
+              .where({ block_number : (blockData.block_number).toString() })
+              .update({transactions: blockData.transactions})
+              .returning("*");
+            }
+            else{
+              for (var i=0; i<blockData.transactions.length;i++)
+              {
+                if(!transactions.includes(blockData.transactions[i]))
+                {
+                  transactions.push(blockData.transactions[i]);
+                }
+              }
+              await DB(BlockModel.table)
+              .where({ block_number : (blockData.block_number).toString() })
+              .update({transactions: transactions})
+              .returning("*");
+            }
+          }
+          else{
+            console.log("block on a block number with zero tranactions");
+          }
+        }
+        
+        if(blockData.transactions != null)
+        {
+          for (var i =0; i < blockData.transactions.length; i++ )
+          {
+            let transaction = await DB(TransactionModel.table).where({ hash :  blockData.transactions[i]});
+            console.log(" transaction "+blockData.transactions[i]+" db record: " + transaction[0]);
+
+            if(transaction.length == 0)
+            {
+              const transactionData = await fetchTransactionDataByHashHelper(blockData.transactions[i]);
+              console.log("transactionData: ",transactionData);
+              
+              let arr = await DB(TransactionModel.table).count('* as total');
+              let count = BigInt(arr[0].total.toString());
+
+              await DB(TransactionModel.table)
+              .insert({
+                id: count + BigInt (1),
+                transaction_Status: "Confirmed",
+                hash: transactionData.result.transaction.TransferObj.hash,
+                block : (blockData.block_number).toString(),
+                from: transactionData.result.transaction.TransferObj.from,
+                to: transactionData.result.transaction.TransferObj.to,
+                value: transactionData.result.transaction.TransferObj.value.toString(),
+                transaction_status: transactionData.result.transaction.transaction_status,
+                functionType: transactionData.result.transaction.type,
+                Status: transactionData.result.transaction.Status,
+                State: transactionData.result.transaction.State,
+                nonce: transactionData.result.transaction.TransferObj.nonce.toString(),
+                type: transactionData.result.transaction.TransferObj.type.toString(),
+                node_id: transactionData.result.transaction.TransferObj.node_id,
+                gas: transactionData.result.transaction.TransferObj.gas.toString(),
+                gas_price: transactionData.result.transaction.TransferObj.gas_price.toString(),
+                input: transactionData.result.transaction.TransferObj.input,
+                unix_timestamp:Date.now()
+              })
+              .returning("*");
+            }
+            else{
+              if(transaction[0].transaction_Status == "Balloted" || transaction[0].transaction_Status == "Unconfirmed" )
+              {
+                console.log("transaction found in the block, updating its status.");
+
+                message = {
+                  topic: "balloted-transaction-removed",
+                  message: {hash: transaction[0].hash}
+                };
+
+                //broad cast message
+                wss.clients.forEach(function each(client) {
+                  if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify(message));
+                  }
+                });
+
+                await DB(TransactionModel.table)
+                .where({hash :  blockData.transactions[i]})
+                .update({
+                  block: (blockData.block_number).toString(),
+                  transaction_Status: "Confirmed",
+                  unix_timestamp:Date.now()
+                })
+                .returning("*");
+
+                await updateUnconfirmeOrBallotedBlock(null);
+
+                message = {
+                  topic: "blocks",
+                  message: block
+                };
+
+                //broad cast message
+                wss.clients.forEach(function each(client) {
+                  if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify(message));
+                  }
+                });
+
+                // save current unconfirmed OR balloted block data 
+                let unconfirmedAndBallotedBlockData = await DB(unconfirmedAndBallotedBlockModel.table);
+                if(unconfirmedAndBallotedBlockData.length == 0)
+                {
+                  await DB(unconfirmedAndBallotedBlockModel.table)
+                  .insert({
+                    id: 1,
+                    unconfirmed_blocknumber: block[0].blockNumber,
+                    unconfirmed_total_transactions : block[0].totalTransactions,
+                    balloted_blocknumber: block[1].blockNumber,
+                    balloted_total_transactions: block[1].totalTransactions
+                  })
+                  .returning("*"); 
+                }
+                else{
+                  await DB(unconfirmedAndBallotedBlockModel.table)
+                  .where({id: 1})
+                  .update({
+                    unconfirmed_blocknumber: block[0].blockNumber,
+                    unconfirmed_total_transactions : block[0].totalTransactions,
+                    balloted_blocknumber: block[1].blockNumber,
+                    balloted_total_transactions: block[1].totalTransactions
+                  })
+                  .returning("*"); 
+                }
+              }
+              else{
+                console.log("Duplicate Transaction, skipping it...  ", blockData.transactions[i]);
+              }
+            }
+          }
+        }
+        await DB(blocksQueueModel.table)
+        .where({hash: blockData.block_hash})
+        .update({Status : "completed"})
+        .returning("*"); 
+      }
+      else{
+        console.log("No new blocks are coming...");
         await sleep(2000);
       }
     }
@@ -1116,9 +1335,11 @@ async function Indexer()
   }
 }
 
+listener();
+handleUnconfirmedTransactions();
 handleBallotedTransactions();
-listenTransactions();
-Indexer();
+handleBlocks();
+//Indexer();
 
 module.exports = {
   router,
