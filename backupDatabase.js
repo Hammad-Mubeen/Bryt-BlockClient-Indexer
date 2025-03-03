@@ -13,8 +13,11 @@ cron.schedule(process.env.BACKUPTIME, () => backup());
 
 function backup() {
   const backupTimestamp=new Date().getTime();
-  const ARCHIVE_PATH = './public/' + `${backupTimestamp}.sql`;
+  console.log("backupTimestamp: ",backupTimestamp);
   
+  const ARCHIVE_PATH = './' + `${backupTimestamp}.sql`;
+  console.log("ARCHIVE_PATH: ",ARCHIVE_PATH);
+
   const username = process.env.DB_USER;
   const database = process.env.DB_DATABASE;
   const host = process.env.DB_HOST;
@@ -22,7 +25,8 @@ function backup() {
 
   // Set the environment variable for the password
   process.env.PGPASSWORD = process.env.DB_PASSWORD;
-
+  console.log("process.env.PGPASSWORD: ",process.env.PGPASSWORD);
+  
   // Construct the pg_dump command
   const command = `pg_dump -U ${username} -h ${host} -p ${port} -d ${database} -f ${ARCHIVE_PATH}`;
 
@@ -38,7 +42,7 @@ function backup() {
       return;
     }
     console.log(`Backup completed: ✅`);
-    uploadtToS3Bucket(ARCHIVE_PATH,'devnet-test/'+backupTimestamp);
+    uploadtToS3Bucket(ARCHIVE_PATH,process.env.FOLDER_NAME + backupTimestamp);
   });
 }
 
