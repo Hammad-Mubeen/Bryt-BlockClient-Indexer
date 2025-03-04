@@ -730,7 +730,7 @@ async function listenToRPCSockets(RPCSocketURL)
       console.log('WebSocket connection closed: ', RPCSocketURL);
       // Attempt to reconnect after a delay when the connection is closed
       console.log("Attempt to reconnect after a delay when the connection is closed...");
-      setTimeout(() =>listenToRPCSockets(RPCSocketURL,transactions,transactions_with_all_data), 5000); // Reconnect after 5 seconds
+      setTimeout(() =>listenToRPCSockets(RPCSocketURL), 5000); // Reconnect after 5 seconds
   });
 }
 async function listener()
