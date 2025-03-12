@@ -737,6 +737,7 @@ async function listener()
 {
   try
   {
+    await makeRPCSClients();
     //listen for unconfirmed transactions and balloted block
     for (var j = 0; j < RPC_SOCKET_URLs.length; j++)
     {
