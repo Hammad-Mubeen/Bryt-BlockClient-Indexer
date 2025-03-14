@@ -891,66 +891,69 @@ async function handleBallotedTransactions()
           let transactionInDB = await DB(TransactionModel.table).where({ hash :  ballot.ballotHashes[i]});
           console.log(" transaction "+ballot.ballotHashes[i]+" db record: " + transactionInDB[0]);
 
-          if(transactionInDB[0].transaction_Status == "Unconfirmed")
+          if(transactionInDB.length != 0)
           {
-            message = {
-              topic: "balloted-transactions",
-              message: {blockNumber: ballot.blockNumber, hash: ballot.ballotHashes[i]}
-            };
-
-            //broad cast message
-            wss.clients.forEach(function each(client) {
-              if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify(message));
-              }
-            });
-
-            await DB(TransactionModel.table)
-            .where({ hash :  ballot.ballotHashes[i]})
-            .update({transaction_Status: "Balloted"})
-            .returning("*");
-  
-            await updateUnconfirmeOrBallotedBlock(ballot.blockNumber);
-            message = {
-              topic: "blocks",
-              message: block
-            };
-
-            //broad cast message
-            wss.clients.forEach(function each(client) {
-              if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify(message));
-              }
-            });
-            
-            // save current unconfirmed OR balloted block data 
-            let unconfirmedAndBallotedBlockData = await DB(unconfirmedAndBallotedBlockModel.table);
-            if(unconfirmedAndBallotedBlockData.length == 0)
+            if(transactionInDB[0].transaction_Status == "Unconfirmed")
             {
-              await DB(unconfirmedAndBallotedBlockModel.table)
-              .insert({
-                id: 1,
-                unconfirmed_blocknumber: block[0].blockNumber,
-                unconfirmed_total_transactions : block[0].totalTransactions,
-                balloted_blocknumber: block[1].blockNumber,
-                balloted_total_transactions: block[1].totalTransactions
-              })
-              .returning("*"); 
+              message = {
+                topic: "balloted-transactions",
+                message: {blockNumber: ballot.blockNumber, hash: ballot.ballotHashes[i]}
+              };
+  
+              //broad cast message
+              wss.clients.forEach(function each(client) {
+                if (client.readyState === WebSocket.OPEN) {
+                  client.send(JSON.stringify(message));
+                }
+              });
+  
+              await DB(TransactionModel.table)
+              .where({ hash :  ballot.ballotHashes[i]})
+              .update({transaction_Status: "Balloted"})
+              .returning("*");
+    
+              await updateUnconfirmeOrBallotedBlock(ballot.blockNumber);
+              message = {
+                topic: "blocks",
+                message: block
+              };
+  
+              //broad cast message
+              wss.clients.forEach(function each(client) {
+                if (client.readyState === WebSocket.OPEN) {
+                  client.send(JSON.stringify(message));
+                }
+              });
+              
+              // save current unconfirmed OR balloted block data 
+              let unconfirmedAndBallotedBlockData = await DB(unconfirmedAndBallotedBlockModel.table);
+              if(unconfirmedAndBallotedBlockData.length == 0)
+              {
+                await DB(unconfirmedAndBallotedBlockModel.table)
+                .insert({
+                  id: 1,
+                  unconfirmed_blocknumber: block[0].blockNumber,
+                  unconfirmed_total_transactions : block[0].totalTransactions,
+                  balloted_blocknumber: block[1].blockNumber,
+                  balloted_total_transactions: block[1].totalTransactions
+                })
+                .returning("*"); 
+              }
+              else{
+                await DB(unconfirmedAndBallotedBlockModel.table)
+                .where({id: 1})
+                .update({
+                  unconfirmed_blocknumber: block[0].blockNumber,
+                  unconfirmed_total_transactions : block[0].totalTransactions,
+                  balloted_blocknumber: block[1].blockNumber,
+                  balloted_total_transactions: block[1].totalTransactions
+                })
+                .returning("*"); 
+              }
             }
             else{
-              await DB(unconfirmedAndBallotedBlockModel.table)
-              .where({id: 1})
-              .update({
-                unconfirmed_blocknumber: block[0].blockNumber,
-                unconfirmed_total_transactions : block[0].totalTransactions,
-                balloted_blocknumber: block[1].blockNumber,
-                balloted_total_transactions: block[1].totalTransactions
-              })
-              .returning("*"); 
+              console.log("Already updated to balloted, skipping it...");
             }
-          }
-          else{
-            console.log("Already updated to balloted, skipping it...");
           }
         }
         await DB(ballotedTransactionsQueueModel.table)
