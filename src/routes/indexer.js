@@ -12,6 +12,7 @@ var unconfirmedAndBallotedBlockModel= require("../db/models/unconfirmedAndBallot
 var unconfirmedTransactionsQueueModel= require("../db/models/unconfirmedTransactionsQueue.model");
 var ballotedTransactionsQueueModel= require("../db/models/ballotedTransactionsQueue.model");
 var blocksQueueModel= require("../db/models/blocksQueue.model");
+var replayBlocksModel= require("../db/models/replayBlocks.model");
 
 console.log("=========== Connecting with RPCs ===========\n");
 
@@ -22,13 +23,7 @@ block = [
   {type:"Balloted", blockNumber: null, totalTransactions: 0 }
 ];
 
-let JSON_RPC_NODE_URLs = [
-'http://' + process.env.NODE_URL +':8010/rpc',
-'http://' + process.env.NODE_URL +':8020/rpc',
-'http://' + process.env.NODE_URL +':8030/rpc',
-'http://' + process.env.NODE_URL +':8040/rpc',
-'http://' + process.env.NODE_URL +':8050/rpc',
-];
+let JSON_RPC_NODE_URLs = process.env.NODE_URLs.split(',');
 
 let RPC_SOCKET_URLs = [
 'ws://' + process.env.NODE_URL +':8010/ws/v2',
@@ -624,12 +619,12 @@ async function getCorrectBlock(blockNumber) {
           {
             index = results.indexOf(results_without_false[0]);
           }
-          minority = true;
-          if(majority == true || majority == null)
-          {
-            lastMinorityBlock = blockNumber;
-          }
-          majority = false;
+          // minority = true;
+          // if(majority == true || majority == null)
+          // {
+          //   lastMinorityBlock = blockNumber;
+          // }
+          // majority = false;
         }
         else{
           console.log("block data is correct, either all block hashes are same on ports OR a highest occurance of one block hash: ",blockNumber);
@@ -640,8 +635,8 @@ async function getCorrectBlock(blockNumber) {
           }
           block_status="Finalized";
 
-          majority = true;
-          latestMajorityBlock = blockNumber;
+          //majority = true;
+          //latestMajorityBlock = blockNumber;
           //syncData();
         }
       }
@@ -652,6 +647,69 @@ async function getCorrectBlock(blockNumber) {
     console.log("Error : ", error);
   }
 }
+
+async function enqueueInUnconfirmedTransactionsQueue(parsedMessage,timestamp)
+{
+  try {
+    //enqueue data
+    await DB(unconfirmedTransactionsQueueModel.table)
+    .insert({
+      hash: parsedMessage.data.TransferObj.hash,
+      Status:"process",
+      timestamp: timestamp,
+      data: JSON.stringify(parsedMessage.data)
+    })
+    .onConflict('hash')
+    .ignore();
+  } catch (error) {
+    console.log('enqueueInUnconfirmedTransactionsQueue function closed: ',error);
+    console.log('enqueueInUnconfirmedTransactionsQueue function closed at hash: ',parsedMessage.data.TransferObj.hash);
+    console.log("Attempt to recall enqueueInUnconfirmedTransactionsQueue function after a delay ...");
+    setTimeout(() =>enqueueInUnconfirmedTransactionsQueue(parsedMessage,timestamp), 5000);
+  }
+}
+async function enqueueInBallotedTransactionsQueue(parsedMessage,timestamp)
+{
+  try {
+    //enqueue data
+    await DB(ballotedTransactionsQueueModel.table)
+    .insert({
+      hash: parsedMessage.data.hashesHex,
+      Status:"process",
+      timestamp: timestamp,
+      data: JSON.stringify({blockNumber: parsedMessage.data.epochCycle,
+         ballotHashes: parsedMessage.data.hashes})
+    })
+    .onConflict('hash')
+    .ignore();
+  } catch (error) {
+    console.log('enqueueInBallotedTransactionsQueue function closed: ',error);
+    console.log('enqueueInBallotedTransactionsQueue function closed at hash: ',parsedMessage.data.hashesHex);
+    console.log("Attempt to recall enqueueInBallotedTransactionsQueue function after a delay ...");
+    setTimeout(() =>enqueueInBallotedTransactionsQueue(parsedMessage,timestamp), 5000);
+  }
+}
+async function enqueueInBlocksQueue(parsedMessage,timestamp)
+{
+  try {
+     //enqueue data
+     await DB(blocksQueueModel.table)
+     .insert({
+       hash: parsedMessage.data.block_hash,
+       Status:"process",
+       timestamp: timestamp,
+       data: JSON.stringify(parsedMessage.data)
+     })
+     .onConflict('hash')
+     .ignore();
+  } catch (error) {
+    console.log('enqueueInBlocksQueue function closed: ',error);
+    console.log('enqueueInBlocksQueue function closed at hash: ',parsedMessage.data.block_hash);
+    console.log("Attempt to recall enqueueInBlocksQueue function after a delay ...");
+    setTimeout(() =>enqueueInBlocksQueue(parsedMessage,timestamp), 5000);
+  }
+}
+
 async function listenToRPCSockets(RPCSocketURL)
 {
   // start listening
@@ -671,52 +729,22 @@ async function listenToRPCSockets(RPCSocketURL)
       {
         console.log('Message from RPC WebSocket: ', RPCSocketURL);
         console.log("mempool_transaction: ",parsedMessage.data);
-        //enqueue data
-        await DB(unconfirmedTransactionsQueueModel.table)
-        .insert({
-          hash: parsedMessage.data.TransferObj.hash,
-          Status:"process",
-          timestamp: timestamp,
-          data: JSON.stringify(parsedMessage.data)
-        })
-        .onConflict('hash')
-        .ignore();
+        await enqueueInUnconfirmedTransactionsQueue(parsedMessage,timestamp);
       }
       else if(parsedMessage.type == "transaction_ballot")
       {
         console.log('Message from RPC WebSocket: ', RPCSocketURL);
         console.log("transaction_ballot: ",parsedMessage.data);
-
         if (parsedMessage.data.hashes != null)
         {
-          //enqueue data
-          await DB(ballotedTransactionsQueueModel.table)
-          .insert({
-            hash: parsedMessage.data.hashesHex,
-            Status:"process",
-            timestamp: timestamp,
-            data: JSON.stringify({blockNumber: parsedMessage.data.epochCycle,
-               ballotHashes: parsedMessage.data.hashes})
-          })
-          .onConflict('hash')
-          .ignore();
+          await enqueueInBallotedTransactionsQueue(parsedMessage,timestamp);
         }
       }
       else if(parsedMessage.type == "finalized_block")
       {
         console.log('Message from RPC WebSocket: ', RPCSocketURL);
         console.log("finalized_block: ",parsedMessage.data);
-
-        //enqueue data
-        await DB(blocksQueueModel.table)
-        .insert({
-          hash: parsedMessage.data.block_hash,
-          Status:"process",
-          timestamp: timestamp,
-          data: JSON.stringify(parsedMessage.data)
-        })
-        .onConflict('hash')
-        .ignore();
+        await enqueueInBlocksQueue(parsedMessage,timestamp);
       }
   });
 
@@ -1175,153 +1203,99 @@ async function handleBlocks()
   }
 }
 
-//Indexer main function
-//This function looks for every block and its transactions and save it in the db
-async function Indexer()
+async function replayBlocks()
 {
   try{
-    console.log("Indexer initiated...");
-    await makeRPCSClients();
-
-    // getting latest block height
-    const blockHeight = BigInt(await fetchLatestBlockHeightHelper());
-    let blockNumber = (blockHeight);
-    console.log("Latest Block Height is: ", blockNumber);
-
-    blockNumber=BigInt(1);
-
-    while (true)
+    let replayBlock = await DB(replayBlocksModel.table);
+    if(replayBlock[0].replayBlocks == true)
     {
-      let blocks = await DB(BlockModel.table).where({ block_number : blockNumber.toString() });
-      console.log(" block number " + blockNumber + " db record: " + blocks[0]);
-     
-      if(blocks.length == 0)
+      let last = BigInt(replayBlock[0].lastBlock), lastBlockNumber= BigInt(replayBlock[0].lastBlock);
+      console.log("Last Block Height is: ", lastBlockNumber);
+
+      console.log("replay Blocks initiated...");
+      await makeRPCSClients();
+
+      // getting latest block Number
+      const blockHeight = BigInt(await fetchLatestBlockHeightHelper());
+      let blockNumber = (blockHeight);
+      console.log("Latest Block Height is: ", blockNumber);
+
+      await DB(replayBlocksModel.table)
+      .where({id: replayBlock[0].id})
+      .update({Status: "Progress"});
+
+      while (true)
       {
-        await setWaitToBeMinedAndRetries(blockNumber);
-        let {blockData,block_status} = await getCorrectBlock(blockNumber);
-        if (blockData == false)
+        let blocks = await DB(BlockModel.table).where({ block_number : lastBlockNumber.toString() });
+        console.log(" block number " + lastBlockNumber + " db record: " + blocks[0]);
+      
+        if(blocks.length == 0)
         {
-          console.log("RPCs have block's data issue ...");
-        }
-        else
-        {
-          await DB(BlockModel.table)
-          .insert({
-            version: blockData.result.version.toString(),
-            merkle_root: blockData.result.version,
-            block_number: blockNumber.toString(),
-            block_status: block_status,
-            previous_hash: blockData.result.previous_hash,
-            state_root: blockData.result.state_root,
-            transaction_root : blockData.result.transaction_root,
-            reciept_root: blockData.result.reciept_root,
-            logs_bloom: blockData.result.logs_bloom,
-            transactions: blockData.result.transactions,
-            block_reward: blockData.result.block_reward,
-            value: blockData.result.value,
-            data: blockData.result.data,
-            to: blockData.result.to,
-            block_hash: blockData.result.block_hash
-          })
-          .returning("*");
-  
-          if(blockData.result.transactions != null)
+          await setWaitToBeMinedAndRetries(lastBlockNumber);
+          let {blockData,block_status} = await getCorrectBlock(lastBlockNumber);
+          if (blockData == false)
           {
-            for (var i =0; i < blockData.result.transactions.length; i++ )
+            console.log("RPCs have block's data issue at blockNumber: ",lastBlockNumber);
+          }
+          else
+          {
+            await DB(BlockModel.table)
+            .insert({
+              id: lastBlockNumber.toString(),
+              version: blockData.result.version.toString(),
+              merkle_root: blockData.result.version,
+              block_number: lastBlockNumber.toString(),
+              block_status: block_status,
+              previous_hash: blockData.result.previous_hash,
+              state_root: blockData.result.state_root,
+              transaction_root : blockData.result.transaction_root,
+              reciept_root: blockData.result.reciept_root,
+              logs_bloom: blockData.result.logs_bloom,
+              transactions: blockData.result.transactions,
+              block_reward: blockData.result.block_reward,
+              value: blockData.result.value,
+              data: blockData.result.data,
+              to: blockData.result.to,
+              block_hash: blockData.result.block_hash
+            })
+            .returning("*");
+
+            if(blockData.result.transactions != null)
             {
-              let transaction = await DB(TransactionModel.table).where({ hash :  blockData.result.transactions[i]});
-              console.log(" transaction "+blockData.result.transactions[i]+" db record: " + transaction[0]);
-
-              if(transaction.length == 0)
+              for (var i =0; i < blockData.result.transactions.length; i++ )
               {
-                const transactionData = await fetchTransactionDataByHashHelper(blockData.result.transactions[i]);
-                console.log("transactionData: ",transactionData);
-    
-                await DB(TransactionModel.table)
-                .insert({
-                  transaction_Status: "Confirmed",
-                  hash: transactionData.result.transaction.TransferObj.hash,
-                  block : blockNumber.toString(),
-                  from: transactionData.result.transaction.TransferObj.from,
-                  to: transactionData.result.transaction.TransferObj.to,
-                  value: transactionData.result.transaction.TransferObj.value.toString(),
-                  transaction_status: transactionData.result.transaction.transaction_status,
-                  functionType: transactionData.result.transaction.type,
-                  Status: transactionData.result.transaction.Status,
-                  State: transactionData.result.transaction.State,
-                  nonce: transactionData.result.transaction.TransferObj.nonce.toString(),
-                  type: transactionData.result.transaction.TransferObj.type.toString(),
-                  node_id: transactionData.result.transaction.TransferObj.node_id,
-                  gas: transactionData.result.transaction.TransferObj.gas.toString(),
-                  gas_price: transactionData.result.transaction.TransferObj.gas_price.toString(),
-                  input: transactionData.result.transaction.TransferObj.input
-                })
-                .returning("*");
-              }
-              else{
-                if(transaction[0].transaction_Status == "Balloted" || transaction[0].transaction_Status == "Unconfirmed" )
+                let transaction = await DB(TransactionModel.table).where({ hash :  blockData.result.transactions[i]});
+                console.log(" transaction "+blockData.result.transactions[i]+" db record: " + transaction[0]);
+
+                if(transaction.length == 0)
                 {
-                  console.log("transaction found in the block, updating its status.");
+                  const transactionData = await fetchTransactionDataByHashHelper(blockData.result.transactions[i]);
+                  console.log("transactionData: ",transactionData);
 
-                  let message = {
-                    topic: "balloted-transaction-removed",
-                    message: {hash: transaction[0].hash}
-                  };
-
-                  //broad cast message
-                  wss.clients.forEach(function each(client) {
-                    if (client.readyState === WebSocket.OPEN) {
-                      client.send(JSON.stringify(message));
-                    }
-                  });
+                  let arr = await DB(TransactionModel.table).count('* as total');
+                  let count = BigInt(arr[0].total.toString());
 
                   await DB(TransactionModel.table)
-                  .where({hash :  blockData.result.transactions[i]})
-                  .update({
-                    block: blockNumber.toString(),
-                    transaction_Status: "Confirmed"
+                  .insert({
+                    id: count + BigInt(1),
+                    transaction_Status: "Confirmed",
+                    hash: transactionData.result.transaction.TransferObj.hash,
+                    block : lastBlockNumber.toString(),
+                    from: transactionData.result.transaction.TransferObj.from,
+                    to: transactionData.result.transaction.TransferObj.to,
+                    value: transactionData.result.transaction.TransferObj.value.toString(),
+                    transaction_status: transactionData.result.transaction.transaction_status,
+                    functionType: transactionData.result.transaction.type,
+                    Status: transactionData.result.transaction.Status,
+                    State: transactionData.result.transaction.State,
+                    nonce: transactionData.result.transaction.TransferObj.nonce.toString(),
+                    type: transactionData.result.transaction.TransferObj.type.toString(),
+                    node_id: transactionData.result.transaction.TransferObj.node_id,
+                    gas: transactionData.result.transaction.TransferObj.gas.toString(),
+                    gas_price: transactionData.result.transaction.TransferObj.gas_price.toString(),
+                    input: transactionData.result.transaction.TransferObj.input
                   })
                   .returning("*");
-
-                  await updateUnconfirmedOrBallotedBlock(null);
-
-                  message = {
-                    topic: "blocks",
-                    message: block
-                  };
-
-                  //broad cast message
-                  wss.clients.forEach(function each(client) {
-                    if (client.readyState === WebSocket.OPEN) {
-                      client.send(JSON.stringify(message));
-                    }
-                  });
-
-                  // save current unconfirmed OR balloted block data 
-                  let unconfirmedAndBallotedBlockData = await DB(unconfirmedAndBallotedBlockModel.table);
-                  if(unconfirmedAndBallotedBlockData.length == 0)
-                  {
-                    await DB(unconfirmedAndBallotedBlockModel.table)
-                    .insert({
-                      id: 1,
-                      unconfirmed_blocknumber: block[0].blockNumber,
-                      unconfirmed_total_transactions : block[0].totalTransactions,
-                      balloted_blocknumber: block[1].blockNumber,
-                      balloted_total_transactions: block[1].totalTransactions
-                    })
-                    .returning("*"); 
-                  }
-                  else{
-                    await DB(unconfirmedAndBallotedBlockModel.table)
-                    .where({id: 1})
-                    .update({
-                      unconfirmed_blocknumber: block[0].blockNumber,
-                      unconfirmed_total_transactions : block[0].totalTransactions,
-                      balloted_blocknumber: block[1].blockNumber,
-                      balloted_total_transactions: block[1].totalTransactions
-                    })
-                    .returning("*"); 
-                  }
                 }
                 else{
                   console.log("Duplicate Transaction, skipping it...  ", blockData.result.transactions[i]);
@@ -1330,11 +1304,27 @@ async function Indexer()
             }
           }
         }
+        else{
+          console.log("Duplicate block, skipping it ...  ", lastBlockNumber);
+        }
+        lastBlockNumber = lastBlockNumber + BigInt(1);
+        if(lastBlockNumber > blockNumber)
+        {
+          break;
+        }
       }
-      else{
-        console.log("Duplicate block, skipping it ...  ", blockNumber);
-      }
-      blockNumber = blockNumber + BigInt(1);
+      console.log("replay blocks successfull from lastBlock " + last + " to block height " + blockNumber + "...");
+      await DB(replayBlocksModel.table)
+      .where({id: replayBlock[0].id})
+      .update({
+        replayBlocks: false,
+        lastBlock: (last).toString(),
+        latestBlock: (blockNumber).toString(),
+        Status: "Completed"
+      });
+    }
+    else{
+      console.log("No need to replay blocks...");
     }
   }catch(error){
     console.log("error : ", error);
@@ -1345,7 +1335,7 @@ listener();
 handleUnconfirmedTransactions();
 handleBallotedTransactions();
 handleBlocks();
-//Indexer();
+replayBlocks();
 
 module.exports = {
   router,
