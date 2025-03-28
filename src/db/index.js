@@ -9,6 +9,14 @@ const db = require("knex")({
     port: DB_PORT,
     database: DB_DATABASE,
   },
+  pool:{
+    min: 0,
+    max: 10,
+    acquireTimeoutMillis: 30000,
+    createTimeoutMillis: 1500,
+    createRetryIntervalMillis: 500,
+    propagateCreateError: false,
+  }
 });
 
 module.exports = db;
