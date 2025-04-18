@@ -11,11 +11,7 @@ const db = require("knex")({
   },
   pool:{
     min: 0,
-    max: 10,
-    acquireTimeoutMillis: 30000,
-    createTimeoutMillis: 1500,
-    createRetryIntervalMillis: 500,
-    propagateCreateError: false,
+    max: 30
   }
 });
 
