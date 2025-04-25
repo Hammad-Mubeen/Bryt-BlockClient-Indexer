@@ -4,8 +4,9 @@
  */
 exports.up = async function (knex) {
     await knex.raw('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
-    return knex.schema.createTable("blocksQueue", function (t) {
+    return knex.schema.createTable("queue", function (t) {
       t.string("hash").primary().notNull();
+      t.string("type").notNull();
       t.string("Status").notNull();
       t.string("timestamp").notNull();
       t.text("data").notNull();
@@ -17,6 +18,6 @@ exports.up = async function (knex) {
    * @returns { Promise<void> }
    */
   exports.down = function (knex) {
-    return knex.schema.dropTable("blocksQueue");
+    return knex.schema.dropTable("queue");
   };
   

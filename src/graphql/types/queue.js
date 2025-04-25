@@ -1,6 +1,5 @@
 const {
     GraphQLObjectType,
-    GraphQLID,
     GraphQLString
 } = require("graphql");
 
@@ -10,6 +9,7 @@ const queueType = new GraphQLObjectType({
     description: "queue type",
     fields: () => ({
         hash: {type : GraphQLString},
+        type: {type : GraphQLString},
         Status: {type : GraphQLString},
         timestamp: {type : GraphQLString},
         data: {type : GraphQLString}

@@ -16,8 +16,7 @@ const DB = require("../db");
 var BlockModel = require("../db/models/block.model");
 var TransactionModel= require("../db/models/transaction.model");
 var unconfirmedAndBallotedBlockModel= require("../db/models/unconfirmedAndBallotedBlock.model");
-var unconfirmedTransactionsQueueModel= require("../db/models/unconfirmedTransactionsQueue.model");
-var ballotedTransactionsQueueModel= require("../db/models/ballotedTransactionsQueue.model");
+var queueModel= require("../db/models/queue.model");
 
 const blocks = {
   type: blocksWithCountType,
@@ -212,9 +211,10 @@ const transactionHistory = {
   },
   async resolve(parent, args, context) {
     try {
-      let unconfirmedTransactionHistory = await DB(unconfirmedTransactionsQueueModel.table).where({hash: args.hash});
+      let unconfirmedTransactionHistory = await DB(queueModel.table).where({type: "mempool_transaction", hash: args.hash});
 
-      let ballotedTransactionHistorys = await DB(ballotedTransactionsQueueModel.table)
+      let ballotedTransactionHistorys = await DB(queueModel.table)
+      .where({type: "transaction_ballot"})
       .orderBy('timestamp','asc');
 
       let ballotedTransactionHistory = null;

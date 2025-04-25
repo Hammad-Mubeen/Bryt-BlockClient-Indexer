@@ -1,8 +1,5 @@
 const {
     GraphQLObjectType,
-    GraphQLID,
-    GraphQLString,
-    GraphQLList
 } = require("graphql");
 
 const { transactionsType } = require('./transactions');

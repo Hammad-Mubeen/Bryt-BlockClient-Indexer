@@ -1,8 +1,6 @@
 const {
     GraphQLObjectType,
-    GraphQLID,
-    GraphQLString,
-    GraphQLList
+    GraphQLString
 } = require("graphql");
 
 const unconfirmedAndBallotedBlockType = new GraphQLObjectType({
