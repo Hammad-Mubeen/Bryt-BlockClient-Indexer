@@ -3,13 +3,7 @@ require("dotenv").config();
 
 const redis =require('redis');
 
-const client = redis.createClient({ 
-    socket: {
-    host: process.env.REDIS_ENDPOINT,
-    port: 6379,
-    tls: {}
-  } 
-});
+const client = redis.createClient({ url: "redis://" + process.env.REDIS_ENDPOINT+ ":6379"});
 
 //const client = redis.createClient({ });
 
