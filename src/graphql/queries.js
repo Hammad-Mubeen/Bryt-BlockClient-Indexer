@@ -9,15 +9,12 @@ const { blocksWithCountType } = require("./types/blocksWithCount");
 const { transactionsType } = require("./types/transactions");
 const { transactionsWithCountType } = require("./types/transactionsWithCount");
 const { unconfirmedAndBallotedBlockType } = require("./types/unconfirmedAndBallotedBlock");
-const { transactionHistoryType } = require("./types/transactionHistory");
 
 const DB = require("../db");
 // import Models
 var BlockModel = require("../db/models/block.model");
 var TransactionModel= require("../db/models/transaction.model");
 var unconfirmedAndBallotedBlockModel= require("../db/models/unconfirmedAndBallotedBlock.model");
-var unconfirmedTransactionsQueueModel= require("../db/models/unconfirmedTransactionsQueue.model");
-var ballotedTransactionsQueueModel= require("../db/models/ballotedTransactionsQueue.model");
 
 const blocks = {
   type: blocksWithCountType,
@@ -185,61 +182,6 @@ const transactionsByAddress = {
   },
 };
 
-const allTransactions = {
-  type: transactionsWithCountType,
-  description: "View all transactions",
-  async resolve(parent, args, context) {
-    try {
-
-      // count total transactions
-      let arr = await DB(TransactionModel.table).count('* as total');
-      let count = arr[0].total.toString();
-
-      let transactions = await DB(TransactionModel.table).orderBy('id','desc');
-      
-      return {transactions: transactions, count: count};
-    } catch (error) {
-      throw new Error(error);
-    }
-  },
-};
-
-const transactionHistory = {
-  type: transactionHistoryType,
-  description: "View a transaction's history",
-  args: {
-    hash: { type: GraphQLString }
-  },
-  async resolve(parent, args, context) {
-    try {
-      let unconfirmedTransactionHistory = await DB(unconfirmedTransactionsQueueModel.table).where({hash: args.hash});
-
-      let ballotedTransactionHistorys = await DB(ballotedTransactionsQueueModel.table)
-      .orderBy('timestamp','asc');
-
-      let ballotedTransactionHistory = null;
-      for (var i=0; i<ballotedTransactionHistorys.length;i++)
-      {
-        let ballotedData = JSON.parse(ballotedTransactionHistorys[i].data);
-        if(ballotedData.ballotHashes.includes(args.hash))
-        {
-          ballotedTransactionHistory=ballotedTransactionHistorys[i];
-          break;
-        }
-      }
-
-      let confirmedTransactionHistory = await DB(TransactionModel.table).where({hash: args.hash});
-
-      return {unconfirmedTransactionHistory:unconfirmedTransactionHistory[0],
-        ballotedTransactionHistory:ballotedTransactionHistory,
-        confirmedTransactionHistory:confirmedTransactionHistory[0]
-      };
-    } catch (error) {
-      throw new Error(error);
-    }
-  },
-};
-
 module.exports = {
   blocks,
   block,
@@ -247,7 +189,5 @@ module.exports = {
   transaction,
   transactionsByAddress,
   transactionsByStatus,
-  unconfirmedAndBallotedBlock,
-  allTransactions,
-  transactionHistory
+  unconfirmedAndBallotedBlock
 };

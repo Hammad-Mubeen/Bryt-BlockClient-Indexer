@@ -2,22 +2,23 @@
 require("dotenv").config();
 var express = require('express');
 var router = express.Router();
-const DB = require("../db");
-const BlockchainClient = require("bryt-sdk");
-const WebSocket = require('ws');
+var DB = require("../db");
+var BlockchainClient = require("bryt-sdk");
+var WebSocket = require('ws');
+var serialize = require("serialize-javascript");
 var BlockModel = require("../db/models/block.model");
 var TransactionModel= require("../db/models/transaction.model");
 var AlertModel= require("../db/models/alert.model");
-var unconfirmedAndBallotedBlockModel= require("../db/models/unconfirmedAndBallotedBlock.model");
-var unconfirmedTransactionsQueueModel= require("../db/models/unconfirmedTransactionsQueue.model");
-var ballotedTransactionsQueueModel= require("../db/models/ballotedTransactionsQueue.model");
-var blocksQueueModel= require("../db/models/blocksQueue.model");
 var replayBlocksModel= require("../db/models/replayBlocks.model");
+
+//Connect to Redis
+const {client : redisClient} = require("../../connetRedis");
 
 console.log("=========== Connecting with RPCs ===========\n");
 
-let rpcs = [], wss = null, current_rpc = null, wait_to_be_mined = null, total_no_of_retries = null,
-lastMinorityBlock = null, latestMajorityBlock = null, minority= null, majority = null,
+let rpcs = [], wss = null, current_rpc = null, mempoolQueuePopFlag = 0, ballotQueuePopFlag = 0, blockQueuePopFlag = 0,
+wait_to_be_mined = null, total_no_of_retries = null, lastMinorityBlock = null, latestMajorityBlock = null, minority= null,
+majority = null,
 block = [
   {type:"Unconfirmed", blockNumber: null, totalTransactions: 0 },
   {type:"Balloted", blockNumber: null, totalTransactions: 0 }
@@ -32,6 +33,15 @@ let RPC_SOCKET_URLs = [
 'ws://' + process.env.NODE_URL +':8040/ws/v2',
 'ws://' + process.env.NODE_URL +':8050/ws/v2',
 ] 
+
+//function to deserialize Block Data
+function deserialize(serializedJavascript) {
+  return eval("(" + serializedJavascript + ")");
+}
+
+const sleep = (num) => {
+  return new Promise((resolve) => setTimeout(resolve, num));
+};
 
 async function createWebSocketServer(server)
 {
@@ -144,61 +154,61 @@ async function changeFaultyBlockStatusInDb(blockNumber,block_status)
 
 async function updateUnconfirmedOrBallotedBlock(blockNumber)
 {
-  let unconfirmedTransactionsCount = await DB(TransactionModel.table).where({transaction_Status: "Unconfirmed"});
-  let ballotedTransactionsCount = await DB(TransactionModel.table).where({transaction_Status: "Balloted"});
+  let unconfirmedTransactionsCount = await DB(TransactionModel.table).where({transaction_Status: "Unconfirmed"}).count('*');
+  let ballotedTransactionsCount = await DB(TransactionModel.table).where({transaction_Status: "Balloted"}).count('*');
 
   let arr = await DB(BlockModel.table).count('* as total');
   let count = BigInt(arr[0].total.toString());
   
   //Case 1: Unconfirmed transaction coming and balloted null
-  if(unconfirmedTransactionsCount.length > 0 && ballotedTransactionsCount.length == 0)
+  if(unconfirmedTransactionsCount[0].count > 0 && ballotedTransactionsCount[0].count == 0)
   {
     block[0].blockNumber = (count + BigInt(1)).toString();
-    block[0].totalTransactions = unconfirmedTransactionsCount.length;
+    block[0].totalTransactions = unconfirmedTransactionsCount[0].count;
     block[1].blockNumber = null;
     block[1].totalTransactions = 0;
     return;
   }
 
   //Case 2: Unconfirmed transaction null and balloted coming
-  if(unconfirmedTransactionsCount.length == 0 && ballotedTransactionsCount.length > 0)
+  if(unconfirmedTransactionsCount[0].count == 0 && ballotedTransactionsCount[0].count > 0)
   {
     if(blockNumber == null)
     {
       console.log("(Unconfirmed transaction null and balloted coming) blockbNumber is : ", blockNumber);
-      block[0].totalTransactions = unconfirmedTransactionsCount.length;
-      block[1].totalTransactions = ballotedTransactionsCount.length;
+      block[0].totalTransactions = unconfirmedTransactionsCount[0].count;
+      block[1].totalTransactions = ballotedTransactionsCount[0].count;
     }
     else{
       block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
-      block[0].totalTransactions = unconfirmedTransactionsCount.length;
+      block[0].totalTransactions = unconfirmedTransactionsCount[0].count;
       block[1].blockNumber = (blockNumber).toString();
-      block[1].totalTransactions = ballotedTransactionsCount.length;   
+      block[1].totalTransactions = ballotedTransactionsCount[0].count;   
     }
     return;
   }
 
   //Case 3: Unconfirmed transaction coming and balloted coming
-  if(unconfirmedTransactionsCount.length > 0 && ballotedTransactionsCount.length > 0)
+  if(unconfirmedTransactionsCount[0].count> 0 && ballotedTransactionsCount[0].count > 0)
   {
     if(blockNumber == null)
     {
       console.log("Unconfirmed transaction came, blockbNumber is : ", blockNumber);
-      block[0].totalTransactions = unconfirmedTransactionsCount.length;
-      block[1].totalTransactions = ballotedTransactionsCount.length;
+      block[0].totalTransactions = unconfirmedTransactionsCount[0].count;
+      block[1].totalTransactions = ballotedTransactionsCount[0].count;
     }
     else
     {
       block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
-      block[0].totalTransactions = unconfirmedTransactionsCount.length;
+      block[0].totalTransactions = unconfirmedTransactionsCount[0].count;
       block[1].blockNumber = (blockNumber).toString();
-      block[1].totalTransactions = ballotedTransactionsCount.length;
+      block[1].totalTransactions = ballotedTransactionsCount[0].count;
     }
     return;  
   }
 
   //Case 4: Unconfirmed transaction and balloted null
-  if(unconfirmedTransactionsCount.length == 0 && ballotedTransactionsCount.length == 0)
+  if(unconfirmedTransactionsCount[0].count == 0 && ballotedTransactionsCount[0].count == 0)
   {
     block[0].blockNumber = null;
     block[0].totalTransactions = 0;
@@ -207,10 +217,6 @@ async function updateUnconfirmedOrBallotedBlock(blockNumber)
     return;
   }
 }
-
-const sleep = (num) => {
-  return new Promise((resolve) => setTimeout(resolve, num));
-};
 
 // to get the latest block height
 async function getLatestBlockHeight(retry) {
@@ -648,68 +654,6 @@ async function getCorrectBlock(blockNumber) {
   }
 }
 
-async function enqueueInUnconfirmedTransactionsQueue(parsedMessage,timestamp)
-{
-  try {
-    //enqueue data
-    await DB(unconfirmedTransactionsQueueModel.table)
-    .insert({
-      hash: parsedMessage.data.TransferObj.hash,
-      Status:"process",
-      timestamp: timestamp,
-      data: JSON.stringify(parsedMessage.data)
-    })
-    .onConflict('hash')
-    .ignore();
-  } catch (error) {
-    console.log('enqueueInUnconfirmedTransactionsQueue function closed: ',error);
-    console.log('enqueueInUnconfirmedTransactionsQueue function closed at hash: ',parsedMessage.data.TransferObj.hash);
-    console.log("Attempt to recall enqueueInUnconfirmedTransactionsQueue function after a delay ...");
-    setTimeout(() =>enqueueInUnconfirmedTransactionsQueue(parsedMessage,timestamp), 5000);
-  }
-}
-async function enqueueInBallotedTransactionsQueue(parsedMessage,timestamp)
-{
-  try {
-    //enqueue data
-    await DB(ballotedTransactionsQueueModel.table)
-    .insert({
-      hash: parsedMessage.data.hashesHex,
-      Status:"process",
-      timestamp: timestamp,
-      data: JSON.stringify({blockNumber: parsedMessage.data.epochCycle,
-         ballotHashes: parsedMessage.data.hashes})
-    })
-    .onConflict('hash')
-    .ignore();
-  } catch (error) {
-    console.log('enqueueInBallotedTransactionsQueue function closed: ',error);
-    console.log('enqueueInBallotedTransactionsQueue function closed at hash: ',parsedMessage.data.hashesHex);
-    console.log("Attempt to recall enqueueInBallotedTransactionsQueue function after a delay ...");
-    setTimeout(() =>enqueueInBallotedTransactionsQueue(parsedMessage,timestamp), 5000);
-  }
-}
-async function enqueueInBlocksQueue(parsedMessage,timestamp)
-{
-  try {
-     //enqueue data
-     await DB(blocksQueueModel.table)
-     .insert({
-       hash: parsedMessage.data.block_hash,
-       Status:"process",
-       timestamp: timestamp,
-       data: JSON.stringify(parsedMessage.data)
-     })
-     .onConflict('hash')
-     .ignore();
-  } catch (error) {
-    console.log('enqueueInBlocksQueue function closed: ',error);
-    console.log('enqueueInBlocksQueue function closed at hash: ',parsedMessage.data.block_hash);
-    console.log("Attempt to recall enqueueInBlocksQueue function after a delay ...");
-    setTimeout(() =>enqueueInBlocksQueue(parsedMessage,timestamp), 5000);
-  }
-}
-
 async function listenToRPCSockets(RPCSocketURL)
 {
   // start listening
@@ -723,28 +667,45 @@ async function listenToRPCSockets(RPCSocketURL)
 
   // Message event: handle messages from the server
   socket.addEventListener('message', async (event) => {
-      const timestamp = Date.now();
       const parsedMessage = JSON.parse(event.data);
       if(parsedMessage.type == "mempool_transaction")
       {
         console.log('Message from RPC WebSocket: ', RPCSocketURL);
         console.log("mempool_transaction: ",parsedMessage.data);
-        await enqueueInUnconfirmedTransactionsQueue(parsedMessage,timestamp);
+        redisClient.RPUSH(
+          process.env.MEMPOOL_REDIS_QUEUE,
+          serialize({ obj: {
+            hash: parsedMessage.data.TransferObj.hash,
+            data: parsedMessage.data
+          }})
+        );
       }
       else if(parsedMessage.type == "transaction_ballot")
       {
         console.log('Message from RPC WebSocket: ', RPCSocketURL);
         console.log("transaction_ballot: ",parsedMessage.data);
-        if (parsedMessage.data.hashes != null)
+        if (parsedMessage.data.hashes.length != 0)
         {
-          await enqueueInBallotedTransactionsQueue(parsedMessage,timestamp);
+          redisClient.RPUSH(
+            process.env.BALLOT_REDIS_QUEUE,
+            serialize({ obj: {
+              hash: parsedMessage.data.hashesHex,
+              data: parsedMessage.data
+            }})
+          );
         }
       }
       else if(parsedMessage.type == "finalized_block")
       {
         console.log('Message from RPC WebSocket: ', RPCSocketURL);
         console.log("finalized_block: ",parsedMessage.data);
-        await enqueueInBlocksQueue(parsedMessage,timestamp);
+        redisClient.RPUSH(
+          process.env.BLOCK_REDIS_QUEUE,
+          serialize({ obj: {
+            hash: parsedMessage.data.block_hash,
+            data: parsedMessage.data
+          }})
+        );
       }
   });
 
@@ -761,10 +722,12 @@ async function listenToRPCSockets(RPCSocketURL)
       setTimeout(() =>listenToRPCSockets(RPCSocketURL), 5000); // Reconnect after 5 seconds
   });
 }
+
 async function listener()
 {
   try
   {
+    await makeRPCSClients();
     //listen for unconfirmed transactions and balloted block
     for (var j = 0; j < RPC_SOCKET_URLs.length; j++)
     {
@@ -775,202 +738,82 @@ async function listener()
   }
 }
 
-async function handleUnconfirmedTransactions()
+async function handleUnconfirmedTransactions(queue)
 {
   try
   {
-    //process unconfirmed transactions
-    let transactionMessage = {}, blockMessage = {};
+    let transactionMessage = {};
     while(true)
     {
-      let unconfirmedTransactionsQueue = await DB(unconfirmedTransactionsQueueModel.table)
-      .where({Status:"process"})
-      .orderBy('timestamp','asc')
-      .limit(1);
-
-      console.log("unconfirmedTransactionsQueue: ",unconfirmedTransactionsQueue[0]);
-      if(unconfirmedTransactionsQueue[0] != undefined)
-      {
-        let transaction = JSON.parse(unconfirmedTransactionsQueue[0].data);
-        let arr = await DB(TransactionModel.table).count('* as total');
-        let count = BigInt(arr[0].total.toString());
-
-        // save unconfirmed transaction in DB
-        await DB(TransactionModel.table)
-        .insert({
-          id: count + BigInt(1),
-          transaction_Status: "Unconfirmed",
-          hash: transaction.TransferObj.hash,
-          from: transaction.TransferObj.from,
-          to: transaction.TransferObj.to,
-          value: transaction.TransferObj.value.toString(),
-          transaction_status: transaction.transaction_status,
-          functionType: transaction.type,
-          Status: transaction.Status,
-          State: transaction.State,
-          nonce: transaction.TransferObj.nonce.toString(),
-          type: transaction.TransferObj.type.toString(),
-          node_id: transaction.TransferObj.node_id,
-          gas: transaction.TransferObj.gas.toString(),
-          gas_price: transaction.TransferObj.gas_price.toString(),
-          input: transaction.TransferObj.input
-        })
-        .onConflict('hash')
-        .ignore();
-
-        await updateUnconfirmedOrBallotedBlock(null);
-
-        // save current unconfirmed OR balloted block data 
-        let unconfirmedAndBallotedBlockData = await DB(unconfirmedAndBallotedBlockModel.table);
-        if(unconfirmedAndBallotedBlockData.length == 0)
+      let redisLength = await redisClient.LLEN(queue);
+      if (redisLength > 0) {
+        let headValue = await redisClient.LINDEX(queue, 0);
+        let deserializedValue = deserialize(headValue).obj;
+        if (await redisClient.SISMEMBER('seen_set', deserializedValue.hash))
         {
-          await DB(unconfirmedAndBallotedBlockModel.table)
-          .insert({
-            id: 1,
-            unconfirmed_blocknumber: block[0].blockNumber,
-            unconfirmed_total_transactions : block[0].totalTransactions,
-            balloted_blocknumber: block[1].blockNumber,
-            balloted_total_transactions: block[1].totalTransactions
-          }); 
-        }
-        else{
-          await DB(unconfirmedAndBallotedBlockModel.table)
-          .where({id: 1})
-          .update({
-            unconfirmed_blocknumber: block[0].blockNumber,
-            unconfirmed_total_transactions : block[0].totalTransactions,
-            balloted_blocknumber: block[1].blockNumber,
-            balloted_total_transactions: block[1].totalTransactions
+          console.log("Mempool Tx read from queue's head is duplicated, poping it... ", deserializedValue.hash);
+          await redisClient.LPOP(queue);
+        }   
+        else
+        {
+          console.log("Mempool Tx read from queue's head is unique, processing it... ", deserializedValue.hash);
+
+          transactionMessage = {
+            topic: "unconfirmed-transactions",
+            message: deserializedValue.data
+          };
+
+          //broad cast transactionMessage
+          wss.clients.forEach(function each(client) {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify(transactionMessage));
+            }
           });
+
+          await redisClient.SADD('seen_set', deserializedValue.hash);
+          await redisClient.LPOP(queue);
         }
-
-        transactionMessage = {
-          topic: "unconfirmed-transactions",
-          message: transaction
-        };
-        blockMessage = {
-          topic: "blocks",
-          message: block
-        };
-
-        //broad cast blockMessage
-        wss.clients.forEach(function each(client) {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(blockMessage));
-          }
-        });
-        //broad cast transactionMessage
-        wss.clients.forEach(function each(client) {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(transactionMessage));
-          }
-        });
-        
-        await DB(unconfirmedTransactionsQueueModel.table)
-        .where({hash: unconfirmedTransactionsQueue[0].hash})
-        .update({Status : "completed"});
-      }
-      else{
-        console.log("No new unconfirmed transactions are coming...");
+      } else {
+        console.log("There are currently no Txs in the Mempool Redis queue...");
         await sleep(2000);
       }
     }
   } catch (error) {
     console.log('handleUnconfirmedTransactions function closed: ',error);
     console.log("Attempt to recall handleUnconfirmedTransactions function after a delay ...");
-    setTimeout(handleUnconfirmedTransactions, 2000);
+    setTimeout(handleUnconfirmedTransactions(queue), 2000);
   }
 }
 
-async function handleBallotedTransactions()
+async function handleBallotedTransactions(queue)
 {
   try
   {
-    //process balloted transactions
-    let transactionMessage = {}, blockMessage = {};
+    let transactionMessage = {};
     while(true)
     {
-      let ballotedTransactionsQueue = await DB(ballotedTransactionsQueueModel.table)
-      .where({Status:"process"})
-      .orderBy('timestamp','asc')
-      .limit(1);
-
-      console.log("ballotedTransactionsQueue: ",ballotedTransactionsQueue[0]);
-
-      if(ballotedTransactionsQueue[0] != undefined)
-      {
-        let ballot = JSON.parse(ballotedTransactionsQueue[0].data);
-  
-        for (var i=0; i< ballot.ballotHashes.length; i++)
+      let redisLength = await redisClient.LLEN(queue);
+      if (redisLength > 0) {
+        let headValue = await redisClient.LINDEX(queue, 0);
+        let deserializedValue = deserialize(headValue).obj;
+        if (await redisClient.SISMEMBER('seen_set', deserializedValue.hash))
         {
-          let unconfirmedTransaction = await DB(unconfirmedTransactionsQueueModel.table)
-          .where({hash:  ballot.ballotHashes[i]})
-          .where({Status:"completed"});
-          if(unconfirmedTransaction.length == 0)
-          {
-            console.log("ballot came before mempool: ",ballot.ballotHashes[i]);
-            while(unconfirmedTransaction.length == 0)
-            {
-              unconfirmedTransaction = await DB(unconfirmedTransactionsQueueModel.table)
-              .where({hash:  ballot.ballotHashes[i]})
-              .where({Status:"completed"});
-              await sleep(1000);
-            }
-            console.log("Sequence wait successfull for ballot: ",ballot.ballotHashes[i]);
-          }
-          else{
-            console.log("ballot came after mempool (Sequence is correct): ",ballot.ballotHashes[i]);
-          }
-          let transactionInDB = await DB(TransactionModel.table).where({ hash :  ballot.ballotHashes[i]});
-          console.log(" transaction "+ballot.ballotHashes[i]+" db record: " + transactionInDB[0]);
+          console.log("Ballot read from queue's head is duplicated, poping it... ", deserializedValue.hash);
+          await redisClient.LPOP(queue);
+        }   
+        else
+        {
+          console.log("Ballot read from queue's head is unique, processing it... ", deserializedValue.hash);
 
-          if(transactionInDB[0].transaction_Status == "Unconfirmed")
-          {
-            await DB(TransactionModel.table)
-            .where({ hash :  ballot.ballotHashes[i]})
-            .update({transaction_Status: "Balloted"});
+          let ballot = deserializedValue.data;
   
-            await updateUnconfirmedOrBallotedBlock(ballot.blockNumber);
-
-            // save current unconfirmed OR balloted block data 
-            let unconfirmedAndBallotedBlockData = await DB(unconfirmedAndBallotedBlockModel.table);
-            if(unconfirmedAndBallotedBlockData.length == 0)
-            {
-              await DB(unconfirmedAndBallotedBlockModel.table)
-              .insert({
-                id: 1,
-                unconfirmed_blocknumber: block[0].blockNumber,
-                unconfirmed_total_transactions : block[0].totalTransactions,
-                balloted_blocknumber: block[1].blockNumber,
-                balloted_total_transactions: block[1].totalTransactions
-              });
-            }
-            else{
-              await DB(unconfirmedAndBallotedBlockModel.table)
-              .where({id: 1})
-              .update({
-                unconfirmed_blocknumber: block[0].blockNumber,
-                unconfirmed_total_transactions : block[0].totalTransactions,
-                balloted_blocknumber: block[1].blockNumber,
-                balloted_total_transactions: block[1].totalTransactions
-              });
-            }
-
+          for (var i=0; i< ballot.hashes.length; i++)
+          {
             transactionMessage = {
               topic: "balloted-transactions",
-              message: {blockNumber: ballot.blockNumber, hash: ballot.ballotHashes[i]}
+              message: {blockNumber: ballot.epochCycle, hash: ballot.hashes[i]}
             };
-            blockMessage = {
-              topic: "blocks",
-              message: block
-            };
-
-            //broad cast transactionMessage
-            wss.clients.forEach(function each(client) {
-              if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify(blockMessage));
-              }
-            });
+            
             //broad cast blockMessage
             wss.clients.forEach(function each(client) {
               if (client.readyState === WebSocket.OPEN) {
@@ -978,228 +821,157 @@ async function handleBallotedTransactions()
               }
             });
           }
-          else{
-            console.log("Already updated to balloted, skipping it...");
-          }
+
+          await redisClient.SADD('seen_set', deserializedValue.hash);
+          await redisClient.LPOP(queue);
         }
-        await DB(ballotedTransactionsQueueModel.table)
-        .where({hash: ballotedTransactionsQueue[0].hash})
-        .update({Status : "completed"});
-      }
-      else{
-        console.log("No balloted transactions are coming...");
+      } else {
+        console.log("There are currently no Txs in the Ballot Redis queue...");
         await sleep(2000);
       }
     }
   } catch (error) {
     console.log('handleBallotedTransactions function closed: ',error);
     console.log("Attempt to recall handleBallotedTransactions function after a delay ...");
-    setTimeout(handleBallotedTransactions, 2000);
+    setTimeout(handleBallotedTransactions(queue), 2000);
   }
 }
 
-async function checkTransactionInBallots(ballottransactions,transaction)
-{
-  for(var i=0; i< ballottransactions.length;i++)
-  {
-    let data = JSON.parse(ballottransactions[i].data);
-    if(data.ballotHashes.includes(transaction))
-    {
-      return ballottransactions[i].hash;
-    }
-  }
-  return null;
-}
-
-async function handleBlocks()
+async function handleBlocks(queue)
 {
   try
   {
-    //process blocks
-    let transactionMessage = {},blockMessage = {};
+    let transactionMessage = {};
     while(true)
-    {
-      let blocksQueue = await DB(blocksQueueModel.table)
-      .where({Status:"process"})
-      .orderBy('timestamp','asc')
-      .limit(1);
-      
-      console.log("blocksQueue: ",blocksQueue[0]);
-      if(blocksQueue[0] != undefined)
-      {
-        let upperTime = (BigInt(blocksQueue[0].timestamp) + BigInt(60000)).toString();
-        let lowerTime = (BigInt(blocksQueue[0].timestamp) - BigInt(60000)).toString();
-        let blockData = JSON.parse(blocksQueue[0].data);
-
-        let blocks = await DB(BlockModel.table).where({ block_number : (blockData.block_number).toString() });
-        console.log(" block number " + blockData.block_number + " db record: " + blocks[0]);
-        
-        if(blocks.length == 0)
+    { 
+      let redisLength = await redisClient.LLEN(queue);
+      if (redisLength > 0) {
+        let headValue = await redisClient.LINDEX(queue, 0);
+        let deserializedValue = deserialize(headValue).obj;
+        if (await redisClient.SISMEMBER('seen_set', deserializedValue.hash))
         {
-          console.log("New block");
-          await DB(BlockModel.table)
-          .insert({
-            id: blockData.block_number,
-            version: blockData.version.toString(),
-            merkle_root: blockData.version,
-            block_number: blockData.block_number,
-            block_status: "Mined",
-            previous_hash: blockData.previous_hash,
-            state_root: blockData.state_root,
-            transaction_root : blockData.transaction_root,
-            reciept_root: blockData.reciept_root,
-            logs_bloom: blockData.logs_bloom,
-            transactions: blockData.transactions,
-            block_reward: blockData.block_reward,
-            value: blockData.value,
-            data: blockData.data,
-            to: blockData.to,
-            block_hash: blockData.block_hash
-          });
-        }
-        else{
+          console.log("Block read from queue's head is duplicated, poping it... ", deserializedValue.hash);
+          await redisClient.LPOP(queue);
+        }   
+        else
+        {
+          console.log("Block read from queue's head is unique, processing it... ", deserializedValue.hash);
+
+          let blockData = deserializedValue.data;
+          let blocks = await DB(BlockModel.table).where({ block_number : (blockData.block_number).toString() });
+          console.log(" block number " + blockData.block_number + " db record: " + blocks[0]);
           
-          if(blockData.transactions != null)
+          if(blocks.length == 0)
           {
-            console.log("block on a block number with transactions");
-            let transactions= blocks[0].transactions;
-            if(transactions == null)
-            {
-              await DB(BlockModel.table)
-              .where({ block_number : (blockData.block_number).toString() })
-              .update({transactions: blockData.transactions});
-            }
-            else{
-              for (var i=0; i<blockData.transactions.length;i++)
-              {
-                if(!transactions.includes(blockData.transactions[i]))
-                {
-                  transactions.push(blockData.transactions[i]);
-                }
-              }
-              await DB(BlockModel.table)
-              .where({ block_number : (blockData.block_number).toString() })
-              .update({transactions: transactions});
-            }
+            console.log("New block");
+            await DB(BlockModel.table)
+            .insert({
+              id: blockData.block_number,
+              version: blockData.version.toString(),
+              merkle_root: blockData.version,
+              block_number: blockData.block_number,
+              block_status: "Mined",
+              previous_hash: blockData.previous_hash,
+              state_root: blockData.state_root,
+              transaction_root : blockData.transaction_root,
+              reciept_root: blockData.reciept_root,
+              logs_bloom: blockData.logs_bloom,
+              transactions: blockData.transactions,
+              block_reward: blockData.block_reward,
+              value: blockData.value,
+              data: blockData.data,
+              to: blockData.to,
+              block_hash: blockData.block_hash
+            });
           }
           else{
-            console.log("block on a block number with zero tranactions");
-          }
-        }
-        
-        if(blockData.transactions != null)
-        {
-          for (var i =0; i < blockData.transactions.length; i++ )
-          {
-            let transactionInDB = await DB(TransactionModel.table).where({ hash :  blockData.transactions[i]});
-            console.log(" transaction "+blockData.transactions[i]+" db record: " + transactionInDB[0]);
-
-            if(transactionInDB[0].transaction_Status == "Confirmed")
+            if(blockData.transactions.length != 0)
             {
-              console.log("Transaction repeated, skipping it...",blockData.transactions[i]);
-            }
-            else{
-              let unconfirmedTransaction = await DB(unconfirmedTransactionsQueueModel.table)
-              .where({hash:  blockData.transactions[i]})
-              .where({Status:"completed"});
-              let ballotedTransactions = await DB(ballotedTransactionsQueueModel.table)
-              .where('timestamp', '>=' ,lowerTime)
-              .where('timestamp', '<=' ,upperTime)
-              .where({Status:"completed"});
-              console.log("ballotedtransactions: ",ballotedTransactions);
-              let result = await checkTransactionInBallots(ballotedTransactions,blockData.transactions[i]);
-              if(unconfirmedTransaction.length == 0 || result == null)
+              console.log("block on a block number with transactions");
+              let transactions= blocks[0].transactions;
+              if(transactions.length == 0)
               {
-                console.log("Finalized Block came before mempool OR ballot: ",blockData.transactions[i]);
-                while(unconfirmedTransaction.length == 0 || result == null)
-                {
-                  unconfirmedTransaction = await DB(unconfirmedTransactionsQueueModel.table)
-                  .where({hash:  blockData.transactions[i]})
-                  .where({Status:"completed"});
-                  ballotedTransactions = await DB(ballotedTransactionsQueueModel.table)
-                  .where('timestamp', '>=' ,lowerTime)
-                  .where('timestamp', '<=' ,upperTime)
-                  .where({Status:"completed"});
-                  result = await checkTransactionInBallots(ballotedTransactions,blockData.transactions[i]);
-                  await sleep(1000);
-                }
-                console.log("Sequence wait successfull for finalized block: ",blockData.transactions[i]);
+                await DB(BlockModel.table)
+                .where({ block_number : (blockData.block_number).toString() })
+                .update({transactions: blockData.transactions});
               }
               else{
-                console.log("Finalized Block came after mempool && ballot (Sequence is correct): ",blockData.transactions[i]);
+                for (var i=0; i<blockData.transactions.length;i++)
+                {
+                  if(!transactions.includes(blockData.transactions[i]))
+                  {
+                    transactions.push(blockData.transactions[i]);
+                  }
+                }
+                await DB(BlockModel.table)
+                .where({ block_number : (blockData.block_number).toString() })
+                .update({transactions: transactions});
               }
-  
-              console.log("transaction found in the block, updating its status.");
-              await DB(TransactionModel.table)
-              .where({hash :  blockData.transactions[i]})
-              .update({
-                block: (blockData.block_number).toString(),
-                transaction_Status: "Confirmed",
-                unix_timestamp:Date.now()
-              });
-            }
-            await updateUnconfirmedOrBallotedBlock(null);
-
-            // save current unconfirmed OR balloted block data 
-            let unconfirmedAndBallotedBlockData = await DB(unconfirmedAndBallotedBlockModel.table);
-            if(unconfirmedAndBallotedBlockData.length == 0)
-            {
-              await DB(unconfirmedAndBallotedBlockModel.table)
-              .insert({
-                id: 1,
-                unconfirmed_blocknumber: block[0].blockNumber,
-                unconfirmed_total_transactions : block[0].totalTransactions,
-                balloted_blocknumber: block[1].blockNumber,
-                balloted_total_transactions: block[1].totalTransactions
-              });
             }
             else{
-              await DB(unconfirmedAndBallotedBlockModel.table)
-              .where({id: 1})
-              .update({
-                unconfirmed_blocknumber: block[0].blockNumber,
-                unconfirmed_total_transactions : block[0].totalTransactions,
-                balloted_blocknumber: block[1].blockNumber,
-                balloted_total_transactions: block[1].totalTransactions
-              });
+              console.log("block on a block number with zero tranactions");
             }
-
-            transactionMessage = {
-              topic: "balloted-transaction-removed",
-              message: {hash: blockData.transactions[i]}
-            };
-            blockMessage = {
-              topic: "blocks",
-              message: block
-            };
-
-            //broad cast transactionMessage
-            wss.clients.forEach(function each(client) {
-              if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify(blockMessage));
-              }
-            });
-            //broad cast blockMessage
-            wss.clients.forEach(function each(client) {
-              if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify(transactionMessage));
-              }
-            });
           }
+          
+          if(blockData.transactions.length != 0)
+          {
+            for (var i =0; i < blockData.transactions.length; i++ )
+            {
+              let transaction = await DB(TransactionModel.table).where({ hash :  blockData.transactions[i]});
+              if(transaction.length == 0)
+              {
+                const transactionData = await fetchTransactionDataByHashHelper(blockData.transactions[i]);
+                console.log("transactionData: ",transactionData);
+
+                await DB(TransactionModel.table)
+                .insert({
+                  transaction_Status: "Confirmed",
+                  hash: transactionData.result.transaction.TransferObj.hash,
+                  block : (blockData.block_number).toString(),
+                  from: transactionData.result.transaction.TransferObj.from,
+                  to: transactionData.result.transaction.TransferObj.to,
+                  value: transactionData.result.transaction.TransferObj.value.toString(),
+                  transaction_status: transactionData.result.transaction.transaction_status,
+                  functionType: transactionData.result.transaction.type,
+                  Status: transactionData.result.transaction.Status,
+                  State: transactionData.result.transaction.State,
+                  nonce: transactionData.result.transaction.TransferObj.nonce.toString(),
+                  type: transactionData.result.transaction.TransferObj.type.toString(),
+                  node_id: transactionData.result.transaction.TransferObj.node_id,
+                  gas: transactionData.result.transaction.TransferObj.gas.toString(),
+                  gas_price: transactionData.result.transaction.TransferObj.gas_price.toString(),
+                  input: transactionData.result.transaction.TransferObj.input
+                });
+
+                transactionMessage = {
+                  topic: "balloted-transaction-removed",
+                  message: {hash: blockData.transactions[i]}
+                };
+  
+                //broad cast blockMessage
+                wss.clients.forEach(function each(client) {
+                  if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify(transactionMessage));
+                  }
+                });
+              }
+              else{
+                console.log("Duplicate Transaction, skipping it...  ", blockData.transactions[i]);
+              }
+            }
+          }
+          await redisClient.SADD('seen_set', deserializedValue.hash);
+          await redisClient.LPOP(queue);
         }
-        await DB(blocksQueueModel.table)
-        .where({hash: blockData.block_hash})
-        .update({Status : "completed"});
-      }
-      else{
-        console.log("No new blocks are coming...");
+      } else {
+        console.log("There are currently no Txs in the Block Redis queue...");
         await sleep(2000);
       }
     }
   } catch (error) {
     console.log('handleBlocks function closed: ',error);
     console.log("Attempt to recall handleBlocks function after a delay ...");
-    setTimeout(handleBlocks, 2000);
+    setTimeout(handleBlocks(queue), 2000);
   }
 }
 
@@ -1331,12 +1103,11 @@ async function replayBlocks()
   }
 }
 
-
 listener();
-handleUnconfirmedTransactions();
-handleBallotedTransactions();
-handleBlocks();
-replayBlocks();
+handleUnconfirmedTransactions(process.env.MEMPOOL_REDIS_QUEUE);
+handleBallotedTransactions(process.env.BALLOT_REDIS_QUEUE);
+handleBlocks(process.env.BLOCK_REDIS_QUEUE);
+//replayBlocks();
 
 module.exports = {
   router,

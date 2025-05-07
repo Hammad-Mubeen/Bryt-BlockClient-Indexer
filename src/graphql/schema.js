@@ -9,9 +9,7 @@ const {
   transaction,
   transactionsByAddress,
   transactionsByStatus,
-  unconfirmedAndBallotedBlock,
-  allTransactions,
-  transactionHistory
+  unconfirmedAndBallotedBlock
 } = require("./queries");
 
 // Define QueryType
@@ -25,9 +23,7 @@ const QueryType = new GraphQLObjectType({
     transaction,
     transactionsByAddress,
     transactionsByStatus,
-    unconfirmedAndBallotedBlock,
-    allTransactions,
-    transactionHistory
+    unconfirmedAndBallotedBlock
   },
 });
 
