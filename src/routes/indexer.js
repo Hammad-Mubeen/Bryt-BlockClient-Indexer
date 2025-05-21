@@ -702,10 +702,20 @@ async function listenToRPCSockets(RPCSocketURL)
         redisClient.RPUSH(
           process.env.BLOCK_REDIS_QUEUE,
           serialize({ obj: {
-            hash: parsedMessage.data.block_hash,
-            data: parsedMessage.data
+            hash: parsedMessage.data.block.block_hash,
+            data: parsedMessage.data.block
           }})
         );
+        if(parsedMessage.data.transactions_array != null)
+        {
+          redisClient.RPUSH(
+            process.env.TRANSACTION_REDIS_QUEUE,
+            serialize({ obj: {
+              block_number: parsedMessage.data.block.block_number,
+              data: parsedMessage.data.transactions_array
+            }})
+          );
+        }
       }
   });
 
@@ -727,7 +737,6 @@ async function listener()
 {
   try
   {
-    await makeRPCSClients();
     //listen for unconfirmed transactions and balloted block
     for (var j = 0; j < RPC_SOCKET_URLs.length; j++)
     {
@@ -749,7 +758,7 @@ async function handleUnconfirmedTransactions(queue)
       if (redisLength > 0) {
         let headValue = await redisClient.LINDEX(queue, 0);
         let deserializedValue = deserialize(headValue).obj;
-        if (await redisClient.SISMEMBER('seen_set', deserializedValue.hash))
+        if (await redisClient.SISMEMBER('seen_set_mempool', deserializedValue.hash))
         {
           console.log("Mempool Tx read from queue's head is duplicated, poping it... ", deserializedValue.hash);
           await redisClient.LPOP(queue);
@@ -770,7 +779,7 @@ async function handleUnconfirmedTransactions(queue)
             }
           });
 
-          await redisClient.SADD('seen_set', deserializedValue.hash);
+          await redisClient.SADD('seen_set_mempool', deserializedValue.hash);
           await redisClient.LPOP(queue);
         }
       } else {
@@ -781,7 +790,7 @@ async function handleUnconfirmedTransactions(queue)
   } catch (error) {
     console.log('handleUnconfirmedTransactions function closed: ',error);
     console.log("Attempt to recall handleUnconfirmedTransactions function after a delay ...");
-    setTimeout(handleUnconfirmedTransactions(queue), 2000);
+    setTimeout(() => handleUnconfirmedTransactions(queue), 2000);
   }
 }
 
@@ -796,7 +805,7 @@ async function handleBallotedTransactions(queue)
       if (redisLength > 0) {
         let headValue = await redisClient.LINDEX(queue, 0);
         let deserializedValue = deserialize(headValue).obj;
-        if (await redisClient.SISMEMBER('seen_set', deserializedValue.hash))
+        if (await redisClient.SISMEMBER('seen_set_ballot', deserializedValue.hash))
         {
           console.log("Ballot read from queue's head is duplicated, poping it... ", deserializedValue.hash);
           await redisClient.LPOP(queue);
@@ -822,7 +831,7 @@ async function handleBallotedTransactions(queue)
             });
           }
 
-          await redisClient.SADD('seen_set', deserializedValue.hash);
+          await redisClient.SADD('seen_set_ballot', deserializedValue.hash);
           await redisClient.LPOP(queue);
         }
       } else {
@@ -833,7 +842,7 @@ async function handleBallotedTransactions(queue)
   } catch (error) {
     console.log('handleBallotedTransactions function closed: ',error);
     console.log("Attempt to recall handleBallotedTransactions function after a delay ...");
-    setTimeout(handleBallotedTransactions(queue), 2000);
+    setTimeout(() => handleBallotedTransactions(queue), 2000);
   }
 }
 
@@ -841,14 +850,13 @@ async function handleBlocks(queue)
 {
   try
   {
-    let transactionMessage = {};
     while(true)
     { 
       let redisLength = await redisClient.LLEN(queue);
       if (redisLength > 0) {
         let headValue = await redisClient.LINDEX(queue, 0);
         let deserializedValue = deserialize(headValue).obj;
-        if (await redisClient.SISMEMBER('seen_set', deserializedValue.hash))
+        if (await redisClient.SISMEMBER('seen_set_block', deserializedValue.hash))
         {
           console.log("Block read from queue's head is duplicated, poping it... ", deserializedValue.hash);
           await redisClient.LPOP(queue);
@@ -912,66 +920,97 @@ async function handleBlocks(queue)
               console.log("block on a block number with zero tranactions");
             }
           }
-          
-          if(blockData.transactions.length != 0)
-          {
-            for (var i =0; i < blockData.transactions.length; i++ )
-            {
-              let transaction = await DB(TransactionModel.table).where({ hash :  blockData.transactions[i]});
-              if(transaction.length == 0)
-              {
-                const transactionData = await fetchTransactionDataByHashHelper(blockData.transactions[i]);
-                console.log("transactionData: ",transactionData);
-
-                await DB(TransactionModel.table)
-                .insert({
-                  transaction_Status: "Confirmed",
-                  hash: transactionData.result.transaction.TransferObj.hash,
-                  block : (blockData.block_number).toString(),
-                  from: transactionData.result.transaction.TransferObj.from,
-                  to: transactionData.result.transaction.TransferObj.to,
-                  value: transactionData.result.transaction.TransferObj.value.toString(),
-                  transaction_status: transactionData.result.transaction.transaction_status,
-                  functionType: transactionData.result.transaction.type,
-                  Status: transactionData.result.transaction.Status,
-                  State: transactionData.result.transaction.State,
-                  nonce: transactionData.result.transaction.TransferObj.nonce.toString(),
-                  type: transactionData.result.transaction.TransferObj.type.toString(),
-                  node_id: transactionData.result.transaction.TransferObj.node_id,
-                  gas: transactionData.result.transaction.TransferObj.gas.toString(),
-                  gas_price: transactionData.result.transaction.TransferObj.gas_price.toString(),
-                  input: transactionData.result.transaction.TransferObj.input
-                });
-
-                transactionMessage = {
-                  topic: "balloted-transaction-removed",
-                  message: {hash: blockData.transactions[i]}
-                };
-  
-                //broad cast blockMessage
-                wss.clients.forEach(function each(client) {
-                  if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify(transactionMessage));
-                  }
-                });
-              }
-              else{
-                console.log("Duplicate Transaction, skipping it...  ", blockData.transactions[i]);
-              }
-            }
-          }
-          await redisClient.SADD('seen_set', deserializedValue.hash);
+          await redisClient.SADD('seen_set_block', deserializedValue.hash);
           await redisClient.LPOP(queue);
         }
       } else {
-        console.log("There are currently no Txs in the Block Redis queue...");
+        console.log("There are currently no blocks in the Block Redis queue...");
         await sleep(2000);
       }
     }
   } catch (error) {
     console.log('handleBlocks function closed: ',error);
     console.log("Attempt to recall handleBlocks function after a delay ...");
-    setTimeout(handleBlocks(queue), 2000);
+    setTimeout(() =>handleBlocks(queue), 2000);
+  }
+}
+
+async function handleFinalizedTransactions(queue)
+{
+  try
+  {
+    let transactionMessage = {};
+    while(true)
+    { 
+      let redisLength = await redisClient.LLEN(queue);
+      if (redisLength > 0) {
+        let headValue = await redisClient.LINDEX(queue, 0);
+        let deserializedValue = deserialize(headValue).obj;
+        let transactionsArray = deserializedValue.data;
+        let uniqueTxs=[];
+        
+        for (var i =0; i < transactionsArray.length; i++ )
+        {
+          let hash = transactionsArray[i].TransferObj.hash;
+          if (await redisClient.SISMEMBER('seen_set_transaction', hash))
+          {
+            console.log("Tx is duplicated: ", hash);
+          }
+          else{
+            console.log("Tx is unique: ", hash);
+            let obj = {
+              transaction_Status: "Confirmed",
+              hash: transactionsArray[i].TransferObj.hash,
+              block : (deserializedValue.block_number).toString(),
+              from: transactionsArray[i].TransferObj.from,
+              to: transactionsArray[i].TransferObj.to,
+              value: transactionsArray[i].TransferObj.value.toString(),
+              transaction_status: transactionsArray[i].transaction_status,
+              functionType: transactionsArray[i].type,
+              Status: transactionsArray[i].Status,
+              State: transactionsArray[i].State,
+              nonce: transactionsArray[i].TransferObj.nonce.toString(),
+              type: transactionsArray[i].TransferObj.type.toString(),
+              node_id: transactionsArray[i].TransferObj.node_id,
+              gas: transactionsArray[i].TransferObj.gas.toString(),
+              gas_price: transactionsArray[i].TransferObj.gas_price.toString(),
+              input: transactionsArray[i].TransferObj.input
+            } 
+            uniqueTxs.push(obj);
+          } 
+        }
+
+        if(uniqueTxs.length != 0)
+        {
+          //Batch Insert Unique Txs Only
+          await DB(TransactionModel.table).insert(uniqueTxs).onConflict('hash').ignore();
+        }
+        
+        for (var i =0; i < uniqueTxs.length; i++ )
+        {
+          transactionMessage = {
+            topic: "balloted-transaction-removed",
+            message: {hash: uniqueTxs[i].hash}
+          };
+
+          //broad cast blockMessage
+          wss.clients.forEach(function each(client) {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify(transactionMessage));
+            }
+          });
+          await redisClient.SADD('seen_set_transaction', uniqueTxs[i].hash);
+        }
+        await redisClient.LPOP(queue);
+      } else {
+        console.log("There are currently no finalized Txs in the Transaction Redis queue...");
+        await sleep(2000);
+      }
+    }
+  } catch (error) {
+    console.log('handleFinalizedTransactions function closed: ',error);
+    console.log("Attempt to recall handleFinalizedTransactions function after a delay ...");
+    setTimeout(() => handleFinalizedTransactions(queue), 2000);
   }
 }
 
@@ -1107,7 +1146,8 @@ listener();
 handleUnconfirmedTransactions(process.env.MEMPOOL_REDIS_QUEUE);
 handleBallotedTransactions(process.env.BALLOT_REDIS_QUEUE);
 handleBlocks(process.env.BLOCK_REDIS_QUEUE);
-//replayBlocks();
+handleFinalizedTransactions(process.env.TRANSACTION_REDIS_QUEUE);
+replayBlocks();
 
 module.exports = {
   router,
