@@ -152,69 +152,55 @@ async function changeFaultyBlockStatusInDb(blockNumber,block_status)
   .returning("*");
 }
 
-async function updateUnconfirmedOrBallotedBlock(blockNumber)
-{
-  let unconfirmedTransactionsCount = await DB(TransactionModel.table).where({transaction_Status: "Unconfirmed"}).count('*');
-  let ballotedTransactionsCount = await DB(TransactionModel.table).where({transaction_Status: "Balloted"}).count('*');
-
-  let arr = await DB(BlockModel.table).count('* as total');
-  let count = BigInt(arr[0].total.toString());
-  
-  //Case 1: Unconfirmed transaction coming and balloted null
-  if(unconfirmedTransactionsCount[0].count > 0 && ballotedTransactionsCount[0].count == 0)
+async function insertInBatches(data, batchSize) {
+  if(data.length > 1000)
   {
-    block[0].blockNumber = (count + BigInt(1)).toString();
-    block[0].totalTransactions = unconfirmedTransactionsCount[0].count;
-    block[1].blockNumber = null;
-    block[1].totalTransactions = 0;
-    return;
+    const chunks = [];
+    for (let i = 0; i < data.length; i += batchSize) {
+      chunks.push(data.slice(i, i + batchSize));
+    }
+    for (const chunk of chunks) {
+      await DB(TransactionModel.table).insert(chunk).onConflict('hash').ignore();
+    }
   }
-
-  //Case 2: Unconfirmed transaction null and balloted coming
-  if(unconfirmedTransactionsCount[0].count == 0 && ballotedTransactionsCount[0].count > 0)
-  {
-    if(blockNumber == null)
-    {
-      console.log("(Unconfirmed transaction null and balloted coming) blockbNumber is : ", blockNumber);
-      block[0].totalTransactions = unconfirmedTransactionsCount[0].count;
-      block[1].totalTransactions = ballotedTransactionsCount[0].count;
-    }
-    else{
-      block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
-      block[0].totalTransactions = unconfirmedTransactionsCount[0].count;
-      block[1].blockNumber = (blockNumber).toString();
-      block[1].totalTransactions = ballotedTransactionsCount[0].count;   
-    }
-    return;
+  else{
+    await DB(TransactionModel.table).insert(data).onConflict('hash').ignore();
   }
+}
 
-  //Case 3: Unconfirmed transaction coming and balloted coming
-  if(unconfirmedTransactionsCount[0].count> 0 && ballotedTransactionsCount[0].count > 0)
-  {
-    if(blockNumber == null)
-    {
-      console.log("Unconfirmed transaction came, blockbNumber is : ", blockNumber);
-      block[0].totalTransactions = unconfirmedTransactionsCount[0].count;
-      block[1].totalTransactions = ballotedTransactionsCount[0].count;
-    }
-    else
-    {
-      block[0].blockNumber = (BigInt(blockNumber) + BigInt(1)).toString();
-      block[0].totalTransactions = unconfirmedTransactionsCount[0].count;
-      block[1].blockNumber = (blockNumber).toString();
-      block[1].totalTransactions = ballotedTransactionsCount[0].count;
-    }
-    return;  
+function generateTransactions(count) {
+  const txs = [];
+  for (let i = 0; i < count; i++) {
+    txs.push({
+      transaction_Status: "Confirmed",
+      hash: i + "0x000383d26065046e1226d23233e7feae298b88264617e750eabf1727991805c8",
+      block : "1",
+      from: "0x262B4E4f89302b38Bb53fEfC0193652F56e62a69",
+      to: "0x262B4E4f89302b38Bb53fEfC0193652F56e62a69",
+      value: "940000000000000",
+      transaction_status: false,
+      functionType: "Mint",
+      Status: false,
+      State: false,
+      nonce: i,
+      type: "0",
+      node_id: "2f60583a-7d44-4a55-5164-258fcb4b8608",
+      gas: "21000",
+      gas_price: "5000000000",
+      input: "null"
+    });
   }
+  return txs;
+}
 
-  //Case 4: Unconfirmed transaction and balloted null
-  if(unconfirmedTransactionsCount[0].count == 0 && ballotedTransactionsCount[0].count == 0)
-  {
-    block[0].blockNumber = null;
-    block[0].totalTransactions = 0;
-    block[1].blockNumber = null;
-    block[1].totalTransactions = 0;
-    return;
+async function testBatchInsert(length,chunk) {
+  const txs = generateTransactions(length);
+  try {
+    console.log('Batch insertion started.');
+    await insertInBatches(txs, chunk);
+    console.log('All txs inserted successfully.');
+  } catch (err) {
+    console.error('Error inserting txs:', err);
   }
 }
 
@@ -983,7 +969,7 @@ async function handleFinalizedTransactions(queue)
         if(uniqueTxs.length != 0)
         {
           //Batch Insert Unique Txs Only
-          await DB(TransactionModel.table).insert(uniqueTxs).onConflict('hash').ignore();
+          await insertInBatches(uniqueTxs, 1000);
         }
         
         for (var i =0; i < uniqueTxs.length; i++ )
@@ -1148,6 +1134,7 @@ handleBallotedTransactions(process.env.BALLOT_REDIS_QUEUE);
 handleBlocks(process.env.BLOCK_REDIS_QUEUE);
 handleFinalizedTransactions(process.env.TRANSACTION_REDIS_QUEUE);
 replayBlocks();
+//testBatchInsert(13000,1000);
 
 module.exports = {
   router,
