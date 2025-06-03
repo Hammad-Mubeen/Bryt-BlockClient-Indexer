@@ -9,10 +9,14 @@ var serialize = require("serialize-javascript");
 var BlockModel = require("../db/models/block.model");
 var TransactionModel= require("../db/models/transaction.model");
 var AlertModel= require("../db/models/alert.model");
+var FailedTxModel= require("../db/models/failedTx.model");
 var replayBlocksModel= require("../db/models/replayBlocks.model");
 
 //Connect to Redis
 const {client : redisClient} = require("../../connetRedis");
+
+// Create a pipeline
+let pipeline = redisClient.multi();
 
 console.log("=========== Connecting with RPCs ===========\n");
 
@@ -765,6 +769,11 @@ async function handleUnconfirmedTransactions(queue)
             }
           });
 
+          redisClient.RPUSH(
+            process.env.FAILURE_CHECKUP_MEMPOOL_REDIS_QUEUE,
+            deserializedValue.hash
+          );
+
           await redisClient.SADD('seen_set_mempool', deserializedValue.hash);
           await redisClient.LPOP(queue);
         }
@@ -791,19 +800,17 @@ async function handleBallotedTransactions(queue)
       if (redisLength > 0) {
         let headValue = await redisClient.LINDEX(queue, 0);
         let deserializedValue = deserialize(headValue).obj;
-        if (await redisClient.SISMEMBER('seen_set_ballot', deserializedValue.hash))
-        {
-          console.log("Ballot read from queue's head is duplicated, poping it... ", deserializedValue.hash);
-          await redisClient.LPOP(queue);
-        }   
-        else
-        {
-          console.log("Ballot read from queue's head is unique, processing it... ", deserializedValue.hash);
+        let ballot = deserializedValue.data;
 
-          let ballot = deserializedValue.data;
-  
-          for (var i=0; i< ballot.hashes.length; i++)
+        for (var i=0; i< ballot.hashes.length; i++)
+        {
+          if (await redisClient.SISMEMBER('seen_set_ballot', ballot.hashes[i]))
           {
+            console.log("Ballot tx hash read is duplicated...", ballot.hashes[i]);
+          }   
+          else
+          {
+            console.log("Ballot tx hash is unique, processing it... ", ballot.hashes[i]);
             transactionMessage = {
               topic: "balloted-transactions",
               message: {blockNumber: ballot.epochCycle, hash: ballot.hashes[i]}
@@ -815,11 +822,10 @@ async function handleBallotedTransactions(queue)
                 client.send(JSON.stringify(transactionMessage));
               }
             });
-          }
-
-          await redisClient.SADD('seen_set_ballot', deserializedValue.hash);
-          await redisClient.LPOP(queue);
+            await redisClient.SADD('seen_set_ballot', ballot.hashes[i]);
+          } 
         }
+        await redisClient.LPOP(queue);
       } else {
         console.log("There are currently no Txs in the Ballot Redis queue...");
         await sleep(2000);
@@ -1000,6 +1006,113 @@ async function handleFinalizedTransactions(queue)
   }
 }
 
+async function checkTxsStatuses(values,hashes)
+{
+  try
+  {
+    for( var i = 0; i < values.length; i++)
+    {
+      let hash = values[i];
+      if (await redisClient.SISMEMBER('seen_set_ballot', hash) && await redisClient.SISMEMBER('seen_set_transaction', hash))
+      {
+        let obj = { hash: hash ,mempoolToBalloted: true, ballotedToFinalized: true };
+        hashes.push(obj);
+      }
+    }
+  } catch (error) {
+    console.log('checkupTxsStatuses function closed: ',error);
+  }
+}
+
+async function transactionsFailureCheckup(queue)
+{
+  try
+  {
+    while(true)
+    {
+      let redisLength = await redisClient.LLEN(queue);
+      if (redisLength > 0) {
+        await sleep(8000);
+        let totalTxToCheck = process.env.TOTAL_TRANSACTIONS_AFTER_WAITING;
+        let values = await redisClient.LRANGE(queue,0,process.env.TOTAL_TRANSACTIONS_AFTER_WAITING);
+        if(values.length != totalTxToCheck)
+        {
+          totalTxToCheck = values.length;
+        }
+        console.log("Checking Txs Journey Completion: ",values);
+
+        let hashes = [],flag = false;
+        let retries = process.env.RETRIES_FOR_BALLOT_AND_FINALIZED;
+        //wait for all txs to come in ballot and finalized block
+        while(true)
+        {
+          hashes = [];
+          await checkTxsStatuses(values,hashes,retries);
+          console.log("Hashes: ", hashes.length);
+          if (hashes.length == totalTxToCheck)
+          {
+            hashes = [];
+            flag = true;
+            break;
+          }
+          retries = retries - 1;
+          if(retries == 0)
+          {
+            hashes = [];
+            flag = false;
+            break;
+          }
+          await sleep(8000);
+        }
+        console.log("flag: ",flag);
+        //finding txs whose journey not completed
+        if(flag == false)
+        {
+          for( var i = 0; i < values.length; i++)
+          {
+            let hash = values[i];
+            let obj = { hash: hash ,mempoolToBalloted: false, ballotedToFinalized: false };
+            if (!await redisClient.SISMEMBER('seen_set_ballot', hash))
+            {
+              obj.mempoolToBalloted = false;
+            }
+
+            if (!await redisClient.SISMEMBER('seen_set_transaction', hash))
+            {
+              obj.ballotedToFinalized = false;
+            }
+
+            if (obj.mempoolToBalloted == false || obj.ballotedToFinalized == false)
+            {
+              hashes.push(obj);
+            }
+          }
+        }
+        
+        //batch inserting txs whose journey not completed
+        if(hashes.length != 0)
+        {
+          await DB(FailedTxModel.table).insert(hashes).onConflict('hash').ignore();
+          console.log("Not completed journey Txs batch insert successfully...");
+        }
+
+        for (let i = 0; i < totalTxToCheck; i++) {
+          pipeline.LPOP(queue);
+        }
+
+        await pipeline.exec();
+      } else {
+        console.log("There are currently no Txs in the Failure Checkup Mempool Redis queue...");
+        await sleep(2000);
+      }
+    }
+  } catch (error) {
+    console.log('transactionsFailureCheckup function closed: ',error);
+    console.log("Attempt to recall transactionsFailureCheckup function after a delay ...");
+    setTimeout(() => transactionsFailureCheckup(queue), 2000);
+  }
+}
+
 async function replayBlocks()
 {
   try{
@@ -1133,6 +1246,7 @@ handleUnconfirmedTransactions(process.env.MEMPOOL_REDIS_QUEUE);
 handleBallotedTransactions(process.env.BALLOT_REDIS_QUEUE);
 handleBlocks(process.env.BLOCK_REDIS_QUEUE);
 handleFinalizedTransactions(process.env.TRANSACTION_REDIS_QUEUE);
+transactionsFailureCheckup(process.env.FAILURE_CHECKUP_MEMPOOL_REDIS_QUEUE);
 replayBlocks();
 //testBatchInsert(13000,1000);
 
