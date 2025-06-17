@@ -3,6 +3,7 @@ const { exec } = require('child_process');
 const cron = require('node-cron');
 const AWS = require('aws-sdk');
 const fs = require('fs');
+const path = require('path');
 
 const s3 = new AWS.S3({
   accessKeyId: process.env.AWS_S3_ACCESS_KEY_ID,
@@ -29,7 +30,7 @@ function backup() {
   
   // Construct the pg_dump command
   const command = `pg_dump -U ${username} -h ${host} -p ${port} -d ${database} -f ${ARCHIVE_PATH}`;
-
+  
   // Run the command
   exec(command,(error, stderr) => {
     
@@ -42,25 +43,38 @@ function backup() {
       return;
     }
     console.log(`Backup completed: ✅`);
-    uploadtToS3Bucket(ARCHIVE_PATH,process.env.FOLDER_NAME + backupTimestamp);
+    uploadToS3Bucket(ARCHIVE_PATH,process.env.FOLDER_NAME + backupTimestamp);
   });
 }
 
-async function uploadtToS3Bucket(pathToBinary,backupTimestamp) {
+async function uploadToS3Bucket(pathToBinary,backupTimestamp) {
+  try {
+    path.basename(pathToBinary);
+    
+    const uploadStream = fs.createReadStream(pathToBinary); // ✅ stream — no full read
 
-  const file = fs.readFileSync(pathToBinary);
-  console.log("Database's Data: ",file);
-  
-  const uploadedImage = await s3.upload({
-    Bucket: process.env.AWS_S3_BUCKET_NAME,
-    Key: backupTimestamp.toString(),
-    Body: file,
-  }).promise();
+    const params = {
+      Bucket: process.env.AWS_S3_BUCKET_NAME,
+      Key: backupTimestamp.toString(),
+      Body: uploadStream,
+    };
 
-  console.log("uploadedImage: ",uploadedImage.Location);
-  console.log("file uploaded to AWS S3 Bucket...");
+    s3.upload(params, (err, data) => {
+      if (err) 
+      {
+        console.error('Upload error:', err);
+      }
+      else 
+      {
+        console.log('Upload success:', data.Location);
+      }
+      fs.unlinkSync(pathToBinary);
+      console.log("file deleted from local public folder...");
+    });
 
-  fs.unlinkSync(pathToBinary);
-  console.log("file deleted from local public folder...");
+  } catch (error) {
+    console.log("Error in uploadtToS3Bucket: ",error);
+    fs.unlinkSync(pathToBinary);
+    console.log("file deleted from local public folder...");
+  }
 }
-
