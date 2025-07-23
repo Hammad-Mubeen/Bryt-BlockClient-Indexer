@@ -1,23 +1,23 @@
-//for all env variables imports
-require("dotenv").config();
+// //for all env variables imports
+// require("dotenv").config();
 
-const redis =require('redis');
+// const redis =require('redis');
 
-const client = redis.createClient({ url: "rediss://" + process.env.REDIS_ENDPOINT+ ":6379"});
+// const client = redis.createClient({ url: "rediss://" + process.env.REDIS_ENDPOINT+ ":6379"});
 
-//const client = redis.createClient({ });
+// //const client = redis.createClient({ });
 
-client.on('connect', function(){
-    console.log('Connected to Redis...');
-}); 
+// client.on('connect', function(){
+//     console.log('Connected to Redis...');
+// }); 
 
-client.on('error', (err) => console.log('Redis Client ', err));
+// client.on('error', (err) => console.log('Redis Client ', err));
 
-async function connectDatabase()
-{
-    await client.connect();
-}
+// async function connectDatabase()
+// {
+//     await client.connect();
+// }
 
-connectDatabase();
+// connectDatabase();
 
-module.exports = {client};
+// module.exports = {client};

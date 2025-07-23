@@ -5,19 +5,16 @@ const {
 
 // import types
 const { blocksType } = require("./types/blocks");
-const { blocksWithCountType } = require("./types/blocksWithCount");
 const { transactionsType } = require("./types/transactions");
 const { transactionsWithCountType } = require("./types/transactionsWithCount");
-const { unconfirmedAndBallotedBlockType } = require("./types/unconfirmedAndBallotedBlock");
 
 const DB = require("../db");
 // import Models
 var BlockModel = require("../db/models/block.model");
 var TransactionModel= require("../db/models/transaction.model");
-var unconfirmedAndBallotedBlockModel= require("../db/models/unconfirmedAndBallotedBlock.model");
 
 const blocks = {
-  type: blocksWithCountType,
+  type: GraphQLList(blocksType),
   description: "Latest blocks and view all blocks",
   args: {
     lastId: { type: GraphQLString },
@@ -26,19 +23,22 @@ const blocks = {
   async resolve(parent, args, context) {
     try {
 
-      // count total blocks
-      let arr = await DB(BlockModel.table).count('* as total');
-      let count = arr[0].total.toString();
+      const limit = parseInt(args.limit) || 10;
+      const lastId = args.lastId ? BigInt(args.lastId) : null;
 
-      let db_last_id = BigInt(count - args.lastId);
+      // Keyset pagination: fetch only needed rows
+      let query = DB(BlockModel.table)
+        .orderBy('id', 'desc')
+        .limit(limit);
 
-      //Keyset pagination for blocks data
-      let blocks = await DB(BlockModel.table)
-      .where('id' ,'<=', db_last_id)
-      .orderBy('id','desc')
-      .limit(parseFloat(args.limit));
+      if (lastId) {
+        query = query.where('id', '<', lastId);
+      }
 
-      return {blocks: blocks, count: count};
+      const blocks = await query;
+      
+      return blocks;
+
     } catch (error) {
       throw new Error(error);
     }
@@ -61,29 +61,8 @@ const block = {
   },
 };
 
-const unconfirmedAndBallotedBlock = {
-  type: new GraphQLList(unconfirmedAndBallotedBlockType),
-  description: "View Unconfirmed and Balloted cuurent socket data",
-  async resolve(parent, context) {
-    try {
-      let unconfirmedAndBallotedBlock = await DB(unconfirmedAndBallotedBlockModel.table);
-      let block = [
-        {type:"Unconfirmed",
-          blockNumber : unconfirmedAndBallotedBlock[0].unconfirmed_blocknumber,
-          totalTransactions: unconfirmedAndBallotedBlock[0].unconfirmed_total_transactions},
-        {type:"Balloted",
-          blockNumber : unconfirmedAndBallotedBlock[0].balloted_blocknumber,
-          totalTransactions: unconfirmedAndBallotedBlock[0].balloted_total_transactions}
-      ];
-      return block;
-    } catch (error) {
-      throw new Error(error);
-    }
-  },
-};
-
 const transactions = {
-  type: transactionsWithCountType,
+  type: GraphQLList(transactionsType),
   description: "Latest transactions and view all transactions",
   args: {
     lastId: { type: GraphQLString },
@@ -92,38 +71,20 @@ const transactions = {
   async resolve(parent, args, context) {
     try {
 
-      // count total transactions
-      let arr = await DB(TransactionModel.table).count('* as total');
-      let count = arr[0].total.toString();
+      const limit = parseInt(args.limit) || 10;
+      const lastId = args.lastId ? BigInt(args.lastId) : null;
 
-      let db_last_id = BigInt(count - args.lastId);
+      // Keyset pagination: fetch only needed rows
+      let query = DB(TransactionModel.table)
+        .orderBy('id', 'desc')
+        .limit(limit);
 
-      //Keyset pagination for transactions data
-      let transactions = await DB(TransactionModel.table)
-      .where('id' ,'<=', db_last_id)
-      .orderBy('id','desc')
-      .limit(parseFloat(args.limit));
+      if (lastId) {
+        query = query.where('id', '<', lastId);
+      }
+
+      const transactions = await query;
       
-      return {transactions: transactions, count: count};
-    } catch (error) {
-      throw new Error(error);
-    }
-  },
-};
-
-const transactionsByStatus = {
-  type: new GraphQLList(transactionsType),
-  description: "Unconfirmed Or Balloted Or Confirmed transactions according to status",
-  args: {
-    status: { type: GraphQLString }
-  },
-  async resolve(parent, args, context) {
-    try {
-
-      let transactions = await DB(TransactionModel.table)
-      .where({transaction_Status : args.status})
-      .orderBy('id','desc');
-
       return transactions;
     } catch (error) {
       throw new Error(error);
@@ -146,6 +107,50 @@ const transaction = {
     }
   },
 };
+
+// const transactionsByAddress = {
+//   type: GraphQLList(transactionsType),
+//   description: "All transactions of an address",
+//   args: {
+//     address: { type: GraphQLString },
+//     searchInto: { type: GraphQLString }, // 'from', 'to', or 'both'
+//     lastId: { type: GraphQLString },     // for keyset pagination
+//     limit: { type: GraphQLString },
+//   },
+//   async resolve(parent, args, context) {
+//     try {
+
+//       const limit = parseInt(args.limit) || 10;
+//       const lastId = args.lastId ? BigInt(args.lastId) : null;
+
+//       let query = DB(TransactionModel.table).orderBy('id', 'desc').limit(limit);
+
+//       // Apply address filter
+//       if (args.searchInto === 'from') {
+//         query = query.where('from', args.address);
+//       } else if (args.searchInto === 'to') {
+//         query = query.where('to', args.address);
+//       } else {
+//         // Default to both (from OR to)
+//         query = query.where(function () {
+//           this.where('from', args.address).orWhere('to', args.address);
+//         });
+//       }
+
+//       // Keyset pagination using id
+//       if (lastId) {
+//         query = query.where('id', '<', lastId);
+//       }
+
+//       const transactions = await query;
+      
+//       return transactions;
+//     } catch (error) {
+//       throw new Error(error);
+//     }
+//   },
+// };
+
 
 const transactionsByAddress = {
   type: transactionsWithCountType,
@@ -187,7 +192,5 @@ module.exports = {
   block,
   transactions,
   transaction,
-  transactionsByAddress,
-  transactionsByStatus,
-  unconfirmedAndBallotedBlock
+  transactionsByAddress
 };

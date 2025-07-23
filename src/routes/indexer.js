@@ -16,17 +16,12 @@ var replayBlocksModel= require("../db/models/replayBlocks.model");
 const {client : redisClient} = require("../../connetRedis");
 
 // Create a pipeline
-let pipeline = redisClient.multi();
+//let pipeline = redisClient.multi();
 
 console.log("=========== Connecting with RPCs ===========\n");
 
-let rpcs = [], wss = null, current_rpc = null, mempoolQueuePopFlag = 0, ballotQueuePopFlag = 0, blockQueuePopFlag = 0,
-wait_to_be_mined = null, total_no_of_retries = null, lastMinorityBlock = null, latestMajorityBlock = null, minority= null,
-majority = null,
-block = [
-  {type:"Unconfirmed", blockNumber: null, totalTransactions: 0 },
-  {type:"Balloted", blockNumber: null, totalTransactions: 0 }
-];
+let rpcs = [], wss = null, current_rpc = null, wait_to_be_mined = null, total_no_of_retries = null,
+lastMinorityBlock = null, latestMajorityBlock = null, minority= null, majority = null;
 
 let JSON_RPC_NODE_URLs = process.env.NODE_URLs.split(',');
 
@@ -1096,11 +1091,11 @@ async function transactionsFailureCheckup(queue)
           console.log("Not completed journey Txs batch insert successfully...");
         }
 
-        for (let i = 0; i < totalTxToCheck; i++) {
-          pipeline.LPOP(queue);
-        }
+        // for (let i = 0; i < totalTxToCheck; i++) {
+        //   pipeline.LPOP(queue);
+        // }
 
-        await pipeline.exec();
+        //await pipeline.exec();
       } else {
         console.log("There are currently no Txs in the Failure Checkup Mempool Redis queue...");
         await sleep(2000);
@@ -1241,13 +1236,13 @@ async function replayBlocks()
   }
 }
 
-listener();
-handleUnconfirmedTransactions(process.env.MEMPOOL_REDIS_QUEUE);
-handleBallotedTransactions(process.env.BALLOT_REDIS_QUEUE);
-handleBlocks(process.env.BLOCK_REDIS_QUEUE);
-handleFinalizedTransactions(process.env.TRANSACTION_REDIS_QUEUE);
-transactionsFailureCheckup(process.env.FAILURE_CHECKUP_MEMPOOL_REDIS_QUEUE);
-replayBlocks();
+//listener();
+//handleUnconfirmedTransactions(process.env.MEMPOOL_REDIS_QUEUE);
+//handleBallotedTransactions(process.env.BALLOT_REDIS_QUEUE);
+//handleBlocks(process.env.BLOCK_REDIS_QUEUE);
+//handleFinalizedTransactions(process.env.TRANSACTION_REDIS_QUEUE);
+//transactionsFailureCheckup(process.env.FAILURE_CHECKUP_MEMPOOL_REDIS_QUEUE);
+//replayBlocks();
 //testBatchInsert(13000,1000);
 
 module.exports = {
